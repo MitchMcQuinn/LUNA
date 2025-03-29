@@ -132,14 +132,6 @@ def create_session():
             for step_id, output in state["data"]["outputs"].items():
                 logger.info(f"Output for step {step_id}: {json.dumps(output, default=str)}")
         
-        # SIMPLIFIED APPROACH: If we're awaiting input and have any step with output,
-        # directly check if there's a greeting in any of the fields we can display
-        greeting_fields = ["prompt", "query", "message", "content", "text"]
-        greeting_message = None
-        
-        # We'll completely remove both greeting mechanisms to prevent duplication
-        # The workflow itself will handle the greeting through the request step
-        
         # Initialize messages list if it doesn't exist
         if "messages" not in state["data"]:
             state["data"]["messages"] = []
@@ -228,11 +220,35 @@ def send_message(session_id):
                 
         # If no error was found, look for actual responses
         if not assistant_response:
+            # Get functions for each step to determine their type
+            step_functions = {}
+            with get_graph_workflow_engine().session_manager.driver.get_session() as session:
+                for step_id in state["workflow"]:
+                    if step_id in state["data"]["outputs"]:
+                        try:
+                            result = session.run(
+                                """
+                                MATCH (s:STEP {id: $id})
+                                RETURN s.utility as utility, s.function as function
+                                """,
+                                id=step_id
+                            )
+                            record = result.single()
+                            if record:
+                                # Use function if available, otherwise utility for compatibility
+                                function_value = record["function"]
+                                if function_value is None:
+                                    function_value = record["utility"]
+                                if function_value:
+                                    step_functions[step_id] = function_value
+                        except Exception as e:
+                            logger.warning(f"Error retrieving function for step {step_id}: {e}")
+
             # Check in the standard places for a response
             if "data" in state and "outputs" in state["data"]:
-                # Try to find a reply step output first
-                for step_id in ["reply", "provide-answer"]:
-                    if step_id in state["data"]["outputs"]:
+                # Try to find steps with reply functions first
+                for step_id, function_name in step_functions.items():
+                    if function_name and "reply" in function_name.lower() and step_id in state["data"]["outputs"]:
                         outputs = state["data"]["outputs"][step_id]
                         
                         # Handle array-based outputs (get most recent)
@@ -249,15 +265,15 @@ def send_message(session_id):
                                         "role": "assistant",
                                         "content": output[field]
                                     }
-                                    logger.info(f"Found response in {step_id}.{field} (most recent output)")
+                                    logger.info(f"Found response in {step_id}.{field} (reply function)")
                                     break
                             if assistant_response:
                                 break
                 
-                # If no reply step found, check for a generate step
+                # If no reply function found, check for generate functions
                 if not assistant_response:
-                    for step_id in ["generate", "generate-answer"]:
-                        if step_id in state["data"]["outputs"]:
+                    for step_id, function_name in step_functions.items():
+                        if function_name and "generate" in function_name.lower() and step_id in state["data"]["outputs"]:
                             outputs = state["data"]["outputs"][step_id]
                             
                             # Handle array-based outputs (get most recent)
@@ -272,7 +288,7 @@ def send_message(session_id):
                                     "role": "assistant",
                                     "content": output["response"]
                                 }
-                                logger.info(f"Found response in {step_id}.response (most recent output)")
+                                logger.info(f"Found response in {step_id}.response (generate function)")
         
         # If no response was found and no error was detected, generate a generic fallback
         if not assistant_response:
