@@ -262,6 +262,20 @@ class GraphWorkflowEngine:
                 self.session_manager.update_session_state(session_id, mark_pending)
                 return "pending"
             
+            # Check if this step needs conversation history
+            if resolved_inputs.get('include_history', False):
+                logger.info(f"Adding conversation history for step {step_id}")
+                
+                # Add message history from session state if it exists
+                if "data" in state and "messages" in state["data"]:
+                    history = state["data"]["messages"]
+                    # Add conversation history directly to resolved inputs
+                    resolved_inputs['history'] = history
+                    logger.info(f"Added {len(history)} messages from session history")
+                else:
+                    logger.warning(f"No messages found in session state for history")
+                    resolved_inputs['history'] = []
+            
             # Get utility function
             utility_func = self.utility_registry.get_utility(function_name)
             if not utility_func:

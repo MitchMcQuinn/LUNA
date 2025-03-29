@@ -44,6 +44,30 @@ def generate(model="gpt-4o-mini", temperature=0.7, system=None, user=None, inclu
         if system:
             messages.append({"role": "system", "content": system})
         
+        # Add conversation history if enabled
+        if include_history:
+            # Try to get history from kwargs
+            history = kwargs.pop('history', None)
+            if history:
+                logger.info(f"Including conversation history ({len(history)} messages)")
+                # If history is a string, try to parse it as JSON
+                if isinstance(history, str):
+                    try:
+                        history = json.loads(history)
+                    except json.JSONDecodeError:
+                        logger.warning(f"Failed to parse history as JSON: {history[:100]}...")
+                
+                # Add each history message to the messages array
+                if isinstance(history, list):
+                    for msg in history:
+                        if isinstance(msg, dict) and 'role' in msg and 'content' in msg:
+                            # Skip any internal fields starting with underscore
+                            cleaned_msg = {k: v for k, v in msg.items() 
+                                          if not k.startswith('_') and k in ['role', 'content']}
+                            messages.append(cleaned_msg)
+                else:
+                    logger.warning(f"History is not a list: {type(history)}")
+        
         # Add user message - ensure it contains "json" word if using schema
         if schema and "json" not in user.lower():
             # Add JSON mention to user message for structured output
