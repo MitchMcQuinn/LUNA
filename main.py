@@ -72,7 +72,7 @@ def create_example_workflow():
             // Root step - initial user input
             CREATE (root:STEP {
               id: "root",
-              utility: "utils.request",
+              function: "utils.request",
               input: '{"prompt": "How can I help you today?"}'
             })
             """)
@@ -81,8 +81,8 @@ def create_example_workflow():
             // Generate answer based on user query
             CREATE (generate:STEP {
               id: "generate-answer",
-              utility: "utils.generate",
-              input: '{"prompt": "User query: \\\"@{SESSION_ID}.root\\\". Provide a helpful response."}'
+              function: "utils.generate",
+              input: '{"user": "User query: \\\"@{SESSION_ID}.root.response\\\". Provide a helpful response."}'
             })
             """)
             
@@ -90,8 +90,8 @@ def create_example_workflow():
             // Reply to user with generated answer
             CREATE (reply:STEP {
               id: "send-response",
-              utility: "utils.reply",
-              input: '{"message": "@{SESSION_ID}.generate-answer"}'
+              function: "utils.reply",
+              input: '{"message": "@{SESSION_ID}.generate-answer.response"}'
             })
             """)
             
