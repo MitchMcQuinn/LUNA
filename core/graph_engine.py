@@ -239,6 +239,11 @@ class GraphWorkflowEngine:
             # Get the input parameters
             input_data = step_details.get("input", {})
             
+            # Ensure input_data is a dictionary
+            if not isinstance(input_data, dict):
+                logger.error(f"Input for step {step_id} is not a dict: {type(input_data)}. Setting to empty dict.")
+                input_data = {}
+            
             # Resolve variables in the input
             from .variable_resolver import resolve_inputs
             resolved_inputs = resolve_inputs(input_data, state)
@@ -312,6 +317,7 @@ class GraphWorkflowEngine:
     
     def _get_step_details(self, step_id):
         """Get step details from Neo4j"""
+        logger = logging.getLogger(__name__)
         with self.session_manager.driver.get_session() as session:
             # Try with both utility and function property names to handle different schema versions
             result = session.run(
@@ -333,11 +339,20 @@ class GraphWorkflowEngine:
                 # Try to parse input as JSON if it's a string
                 if isinstance(input_data, str):
                     try:
-                        import json
                         input_data = json.loads(input_data)
-                    except:
-                        # If we can't parse as JSON, leave as is
-                        pass
+                        logger.debug(f"Successfully parsed input JSON for step {step_id}")
+                    except json.JSONDecodeError as e:
+                        logger.error(f"Failed to parse input as JSON for step {step_id}: {e}")
+                        logger.error(f"Invalid JSON: {input_data}")
+                        # Return empty dict instead of invalid string to prevent errors
+                        input_data = {}
+                elif input_data is None:
+                    # Ensure we return an empty dict for None
+                    input_data = {}
+                elif not isinstance(input_data, dict):
+                    # Ensure non-dict values are converted to empty dict
+                    logger.warning(f"Input for step {step_id} is not a string or dict: {type(input_data)}")
+                    input_data = {}
                 
                 return {
                     "function": function_value,  # Use function as the key consistently
@@ -370,48 +385,44 @@ class GraphWorkflowEngine:
                 step_executed = info.get("last_executed", 0)
                 if step_executed > last_evaluated:
                     recently_completed_steps.append(step_id)
+                    logger.info(f"Found recently completed step: {step_id} (executed at {step_executed})")
         
-        # If no recently completed steps, try to use all completed steps as a fallback
+        # If no recently completed steps, try using all completed steps, but more cautiously
         if not recently_completed_steps:
             logger.info("No recently completed steps, checking all completed steps as fallback")
             
-            # Check if we have a reply step that already evaluated merits_followup as false
-            completion_check_already_run = False
+            # Get all completed steps
+            all_completed_steps = [step_id for step_id, info in state["workflow"].items() 
+                                  if info["status"] == "complete"]
+            logger.info(f"Found {len(all_completed_steps)} completed steps as fallback")
             
-            # Look for evidence that a reply->request path with conditions was already evaluated to false
-            for step_id, info in state["workflow"].items():
-                if step_id == "reply" and info["status"] == "complete":
-                    # Check if reply step is complete and merits_followup condition was checked
-                    path_records = []
-                    with self.session_manager.driver.get_session() as session:
-                        try:
-                            result = session.run(
-                                """
-                                MATCH (s:STEP {id: 'reply'})-[r:NEXT]->(target:STEP {id: 'request'})
-                                WHERE r.conditions IS NOT NULL
-                                RETURN r.conditions as conditions
-                                """)
-                            path_records = list(result)
-                        except Exception as e:
-                            logger.error(f"Error checking reply->request path conditions: {e}")
-                    
-                    # If there's a conditional path from reply to request, we should respect its evaluation
-                    if path_records and len(path_records) > 0:
-                        logger.info("Found conditional path from reply->request that was already evaluated")
-                        # If we're here and there are no active steps, it means the condition was false
-                        # (otherwise request would be active)
-                        if any("merits_followup" in str(record.get("conditions", "")) for record in path_records):
-                            logger.info("merits_followup condition exists and was likely false, ending conversation")
-                            completion_check_already_run = True
+            # Check for any active steps before assuming conversation should end
+            active_steps = [step_id for step_id, info in state["workflow"].items() 
+                           if info["status"] in ["active", "awaiting_input"]]
             
-            if completion_check_already_run:
-                logger.info("Not activating any steps - conversation naturally ended")
-                return
+            # Only if we have no active steps AND we have at least one completed step, we might consider ending
+            if not active_steps and all_completed_steps:
+                logger.info("No active steps found, checking if this is a natural end or needs continuation")
                 
-            # Standard fallback if not a condition-based completion
-            for step_id, info in state["workflow"].items():
-                if info["status"] == "complete":
-                    recently_completed_steps.append(step_id)
+                # Get the most recently completed step
+                latest_step = None
+                latest_time = 0
+                
+                for step_id, info in state["workflow"].items():
+                    if info["status"] == "complete" and info.get("last_executed", 0) > latest_time:
+                        latest_time = info.get("last_executed", 0)
+                        latest_step = step_id
+                
+                if latest_step:
+                    logger.info(f"Most recently completed step: {latest_step}")
+                    recently_completed_steps = [latest_step]
+                else:
+                    # If we can't determine a latest step, use the default logic
+                    logger.info("Using all completed steps to evaluate paths")
+                    recently_completed_steps = all_completed_steps
+            else:
+                # Either we have active steps or no completed steps - use all completed
+                recently_completed_steps = all_completed_steps
         
         # If still no steps to process, return
         if not recently_completed_steps:
@@ -471,7 +482,9 @@ class GraphWorkflowEngine:
                                 # Resolve variable reference
                                 try:
                                     result = self.variable_resolver.resolve_variable(condition, state)
-                                    condition_results.append(bool(result))
+                                    condition_result = bool(result)
+                                    condition_results.append(condition_result)
+                                    logger.info(f"Evaluated condition '{condition}' to {condition_result}")
                                 except Exception as e:
                                     logger.error(f"Error evaluating condition '{condition}': {e}")
                                     condition_results.append(False)
@@ -485,7 +498,7 @@ class GraphWorkflowEngine:
                                 logger.warning(f"Unknown operator '{operator}', defaulting to AND")
                                 should_activate = all(condition_results)
                             
-                            logger.info(f"Conditions for {step_id} -> {target_id}: {condition_results} with operator {operator}")
+                            logger.info(f"Conditions for {step_id} -> {target_id}: {condition_results} with operator {operator}, should_activate={should_activate}")
                         
                         # If conditions pass, activate the target step
                         if should_activate:
