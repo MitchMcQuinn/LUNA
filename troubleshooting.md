@@ -1,6 +1,6 @@
 These are some general things to keep in mind while doing development work on this project:
 
-- This is a general-purpose framework, and so all solutions implemented must be workflow-agnostic. We should not implement and custom or special handling for specific workflow instances.
+- This is a general-purpose framework, and so all solutions implemented must be workflow-agnostic. We should not implement and custom or special handling for specific workflow instances. What this means in practice is that the workflow engine can make special allowances for specific utilities by referencing the node's function, but not make any special allowances for a node as referenced by its id.
 
 - A step node does not have to have a defined utility. If there is no defined utility, we continue as if there was a utility function and it executed successfully. 
 
