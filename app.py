@@ -114,10 +114,15 @@ def create_session():
             # Find the step that's awaiting input
             for step_id, info in state["workflow"].items():
                 if info["status"] == "awaiting_input":
-                    logger.info(f"Step {step_id} is awaiting input")
                     if step_id in state["data"]["outputs"]:
-                        awaiting_input = state["data"]["outputs"][step_id]
-                        logger.info(f"Step {step_id} output: {json.dumps(awaiting_input, default=str)}")
+                        outputs = state["data"]["outputs"][step_id]
+                        
+                        # Handle array-based outputs (get most recent)
+                        if isinstance(outputs, list) and outputs:
+                            awaiting_input = outputs[-1]  # Get the most recent output
+                        else:
+                            # Backward compatibility for non-array outputs
+                            awaiting_input = outputs
                     break
         else:
             logger.warning(f"Workflow completed immediately with status: {status}")
@@ -127,6 +132,14 @@ def create_session():
             for step_id, output in state["data"]["outputs"].items():
                 logger.info(f"Output for step {step_id}: {json.dumps(output, default=str)}")
         
+        # SIMPLIFIED APPROACH: If we're awaiting input and have any step with output,
+        # directly check if there's a greeting in any of the fields we can display
+        greeting_fields = ["prompt", "query", "message", "content", "text"]
+        greeting_message = None
+        
+        # We'll completely remove both greeting mechanisms to prevent duplication
+        # The workflow itself will handle the greeting through the request step
+        
         # Initialize messages list if it doesn't exist
         if "messages" not in state["data"]:
             state["data"]["messages"] = []
@@ -134,61 +147,6 @@ def create_session():
         # Get the current messages
         messages = state["data"].get("messages", [])
         logger.info(f"Initial messages count: {len(messages)}")
-        
-        # SIMPLIFIED APPROACH: If we're awaiting input and have any step with output,
-        # directly check if there's a greeting in any of the fields we can display
-        greeting_fields = ["prompt", "query", "message", "content", "text"]
-        greeting_message = None
-        
-        if awaiting_input:
-            # First check the awaiting_input structure
-            for field in greeting_fields:
-                if field in awaiting_input and awaiting_input[field]:
-                    greeting_message = awaiting_input[field]
-                    logger.info(f"Found greeting in awaiting_input.{field}: {greeting_message}")
-                    break
-        
-        # If we found a greeting, add it to messages
-        if greeting_message:
-            greeting = {
-                'role': 'assistant',
-                'content': greeting_message
-            }
-            
-            # Only add if it's not already in messages
-            if not any(m.get('role') == 'assistant' and m.get('content') == greeting_message for m in messages):
-                messages.append(greeting)
-                logger.info(f"Added greeting message: {greeting_message}")
-                
-                # Update session state with greeting
-                def update_greeting(current_state):
-                    if 'messages' not in current_state['data']:
-                        current_state['data']['messages'] = []
-                    current_state['data']['messages'].append(greeting)
-                    return current_state
-                
-                session_manager.update_session_state(session_id, update_greeting)
-        else:
-            # Fallback to hardcoded greeting if we couldn't find one
-            fallback_greeting = "GM! How can I help?"
-            if not any(m.get('role') == 'assistant' for m in messages):
-                messages.append({
-                    'role': 'assistant',
-                    'content': fallback_greeting
-                })
-                logger.info(f"Added fallback greeting: {fallback_greeting}")
-                
-                # Update session state with fallback greeting
-                def update_greeting(current_state):
-                    if 'messages' not in current_state['data']:
-                        current_state['data']['messages'] = []
-                    current_state['data']['messages'].append({
-                        'role': 'assistant',
-                        'content': fallback_greeting
-                    })
-                    return current_state
-                
-                session_manager.update_session_state(session_id, update_greeting)
         
         return jsonify({
             'session_id': session_id,
@@ -275,7 +233,15 @@ def send_message(session_id):
                 # Try to find a reply step output first
                 for step_id in ["reply", "provide-answer"]:
                     if step_id in state["data"]["outputs"]:
-                        output = state["data"]["outputs"][step_id]
+                        outputs = state["data"]["outputs"][step_id]
+                        
+                        # Handle array-based outputs (get most recent)
+                        if isinstance(outputs, list) and outputs:
+                            output = outputs[-1]  # Get the most recent output
+                        else:
+                            # Backward compatibility for non-array outputs
+                            output = outputs
+                            
                         if isinstance(output, dict):
                             for field in ["message", "content", "response"]:
                                 if field in output and output[field]:
@@ -283,7 +249,7 @@ def send_message(session_id):
                                         "role": "assistant",
                                         "content": output[field]
                                     }
-                                    logger.info(f"Found response in {step_id}.{field}")
+                                    logger.info(f"Found response in {step_id}.{field} (most recent output)")
                                     break
                             if assistant_response:
                                 break
@@ -292,14 +258,22 @@ def send_message(session_id):
                 if not assistant_response:
                     for step_id in ["generate", "generate-answer"]:
                         if step_id in state["data"]["outputs"]:
-                            output = state["data"]["outputs"][step_id]
+                            outputs = state["data"]["outputs"][step_id]
+                            
+                            # Handle array-based outputs (get most recent)
+                            if isinstance(outputs, list) and outputs:
+                                output = outputs[-1]  # Get the most recent output
+                            else:
+                                # Backward compatibility for non-array outputs
+                                output = outputs
+                                
                             if isinstance(output, dict) and "response" in output:
                                 assistant_response = {
                                     "role": "assistant",
                                     "content": output["response"]
                                 }
-                                logger.info(f"Found response in {step_id}.response")
-                            
+                                logger.info(f"Found response in {step_id}.response (most recent output)")
+        
         # If no response was found and no error was detected, generate a generic fallback
         if not assistant_response:
             logger.warning(f"No response found in workflow outputs")
@@ -325,11 +299,77 @@ def send_message(session_id):
             
             session_manager.update_session_state(session_id, update_messages)
         
+        # Check if we're awaiting input and add the prompt as a message
+        awaiting_input = None
+        if status == "awaiting_input":
+            # Find the step that's awaiting input
+            for step_id, info in state["workflow"].items():
+                if info["status"] == "awaiting_input":
+                    if step_id in state["data"]["outputs"]:
+                        outputs = state["data"]["outputs"][step_id]
+                        
+                        # Handle array-based outputs
+                        if isinstance(outputs, list) and outputs:
+                            awaiting_input = outputs[-1]  # Get most recent
+                        else:
+                            awaiting_input = outputs
+                            
+                        # Add the prompt as a message if it exists
+                        if awaiting_input and isinstance(awaiting_input, dict):
+                            prompt_fields = ["prompt", "query", "message", "content", "text"]
+                            for field in prompt_fields:
+                                if field in awaiting_input and awaiting_input[field]:
+                                    prompt_content = awaiting_input[field]
+                                    
+                                    # Check if this prompt is already in the messages
+                                    prompt_exists = False
+                                    logger.info(f"PROMPT_CHECK: Looking for existing prompt: '{prompt_content[:50]}...'")
+                                    
+                                    # Check all messages, not just the most recent ones
+                                    for i, msg in enumerate(state["data"]["messages"]):
+                                        if msg.get("role") == "assistant" and msg.get("content") == prompt_content:
+                                            prompt_exists = True
+                                            logger.info(f"PROMPT_CHECK: Found existing prompt at index {i}")
+                                            break
+                                    
+                                    if not prompt_exists:
+                                        # Create a new prompt message
+                                        prompt_message = {
+                                            "role": "assistant", 
+                                            "content": prompt_content,
+                                            "_prompt_id": str(uuid.uuid4())[:8],  # Add unique ID for tracking
+                                            "timestamp": time.time()  # Add timestamp for ordering
+                                        }
+                                        
+                                        # Add the prompt to messages
+                                        state["data"]["messages"].append(prompt_message)
+                                        logger.info(f"PROMPT_ADD: Added new prompt message (ID: {prompt_message['_prompt_id']}): '{prompt_content[:50]}...'")
+                                        
+                                        # Update state with prompt message
+                                        def update_with_prompt(current_state):
+                                            # Check for duplicates before adding
+                                            exists = False
+                                            logger.info(f"PROMPT_UPDATE: Checking for duplicate in session state update")
+                                            for msg in current_state["data"]["messages"]:
+                                                if msg.get("role") == "assistant" and msg.get("content") == prompt_content:
+                                                    exists = True
+                                                    logger.info(f"PROMPT_UPDATE: Found duplicate in session update")
+                                                    break
+                                                    
+                                            if not exists:
+                                                current_state["data"]["messages"].append(prompt_message.copy())
+                                                logger.info(f"PROMPT_UPDATE: Added prompt in session update (ID: {prompt_message['_prompt_id']})")
+                                            return current_state
+                                        
+                                        session_manager.update_session_state(session_id, update_with_prompt)
+                                    break
+                    break
+        
         # Return messages and current status
         return jsonify({
             'status': status,
             'messages': state["data"]["messages"],
-            'awaiting_input': status == "awaiting_input"
+            'awaiting_input': awaiting_input
         })
     except Exception as e:
         logger.error(f"Error processing message: {e}", exc_info=True)
@@ -354,13 +394,28 @@ def get_session(session_id):
         
         # Check if the workflow is waiting for input
         awaiting_input = None
+        prompt_added_in_get = False  # Track if we add a prompt in this GET request
+        
         if status == "awaiting_input":
             # Find the step that's awaiting input
             for step_id, info in state["workflow"].items():
                 if info["status"] == "awaiting_input":
                     if step_id in state["data"]["outputs"]:
-                        awaiting_input = state["data"]["outputs"][step_id]
-                    break
+                        outputs = state["data"]["outputs"][step_id]
+                        
+                        # Handle array-based outputs (get most recent)
+                        if isinstance(outputs, list) and outputs:
+                            awaiting_input = outputs[-1]  # Get the most recent output
+                        else:
+                            # Backward compatibility for non-array outputs
+                            awaiting_input = outputs
+                        
+                        # Since the POST /message endpoint already adds prompts,
+                        # we'll avoid adding them again in GET to prevent duplicates.
+                        # Just include awaiting_input data in the response
+                        prompt_added_in_get = True
+                        logger.info(f"GET: Found awaiting_input state but not adding prompt to avoid duplicates")
+                        break
                  
         return jsonify({
             'session_id': session_id,

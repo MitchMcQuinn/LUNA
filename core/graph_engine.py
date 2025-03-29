@@ -8,6 +8,7 @@ from .utility_registry import get_utility_registry
 from .variable_resolver import resolve_inputs
 import logging
 import re
+import time
 
 class GraphWorkflowEngine:
     def __init__(self, session_manager=None, utility_registry=None):
@@ -16,142 +17,122 @@ class GraphWorkflowEngine:
         self._recursion_depth = 0
         self._max_recursion = 5
         
+        # Import variable resolver
+        from .variable_resolver import resolve_variable, resolve_inputs
+        self.variable_resolver = type('VariableResolver', (), {
+            'resolve_variable': resolve_variable,
+            'resolve_variables': resolve_inputs
+        })
+        
     def process_workflow(self, session_id):
-        """Process the workflow for the given session until completion or wait state"""
-        try:
-            # Set up logging
-            logger = logging.getLogger(__name__)
+        """Process workflow steps until completion or waiting for input"""
+        logger = logging.getLogger(__name__)
+        
+        MAX_ITERATIONS = 20  # Safety limit
+        iterations = 0
+        
+        while iterations < MAX_ITERATIONS:
+            iterations += 1
+            logger.info(f"Processing workflow iteration {iterations} for session {session_id}")
             
             # Get current session state
-            manager = self.session_manager
-            state = manager.get_session_state(session_id)
+            state = self.session_manager.get_session_state(session_id)
             if not state:
-                logger.error(f"Cannot process workflow - session {session_id} not found")
+                logger.error(f"Session {session_id} not found")
                 return "error"
-                
-            # Find all steps that are active or awaiting active status
-            pending_steps = []
+            
+            # Find all active steps
+            active_steps = []
             for step_id, info in state["workflow"].items():
-                if info["status"] == "active" or info["status"] == "pending":
-                    pending_steps.append(step_id)
+                if info["status"] == "active":
+                    active_steps.append(step_id)
             
-            logger.info(f"Starting workflow processing with pending steps: {pending_steps}")
-            if not pending_steps:
-                logger.warning("No active steps found to process")
-                
-                # Check if we need to activate the root step
+            logger.info(f"Found {len(active_steps)} active steps: {active_steps}")
+            
+            # If no active steps, check if we need to activate the root step
+            if not active_steps:
+                # Check if root step exists and is not already completed
                 if "root" in state["workflow"] and state["workflow"]["root"]["status"] != "complete":
-                    logger.info("Activating root step")
-                    pending_steps.append("root")
-                    self._update_step_status(session_id, "root", "active")
-                else:
-                    logger.warning("Root step not found or already complete")
-                    
-                    # IMPORTANT: If no active steps are found, check for completed steps with outgoing relationships
-                    # This is critical for workflow progression after a step is completed
-                    next_steps = self._find_next_steps(session_id)
-                    if next_steps:
-                        logger.info(f"Found next steps to activate: {[s['step_id'] for s in next_steps]}")
-                        for next_step in next_steps:
-                            step_id_to_activate = next_step["step_id"]
-                            source_step = next_step["source_step"]
-                            is_loop = False
-                            
-                            # Activate the step
-                            step_status = self._activate_step(session_id, step_id_to_activate, source_step, is_loop)
-                            if step_status == "active" or step_status == "pending":
-                                pending_steps.append(step_id_to_activate)
-            
-            # Process any pending steps
-            iterations = 0
-            max_iterations = 20  # Safety measure
-            while pending_steps and iterations < max_iterations:
-                iterations += 1
-                logger.info(f"Processing iteration {iterations}, pending steps: {pending_steps}")
-                
-                # Process the first pending step
-                step_id = pending_steps.pop(0)
-                status = self._process_step(session_id, step_id)
-                
-                # If step is awaiting input, break processing
-                if status == "awaiting_input":
-                    logger.info(f"Step {step_id} is awaiting input, pausing workflow")
-                    return "awaiting_input"
-                
-                # After processing, find if there are any newly active steps
-                state = manager.get_session_state(session_id)
-                next_steps = self._find_next_steps(session_id)
-                
-                logger.info(f"Evaluated next steps: {[s['step_id'] for s in next_steps]}")
-                
-                # Activate the next steps based on priority
-                for next_step in next_steps:
-                    step_id_to_activate = next_step["step_id"]
-                    source_step = next_step["source_step"]
-                    
-                    # Check if this is a loop activation of a completed step
-                    is_loop = False
-                    if step_id_to_activate in state["workflow"]:
-                        current_status = state["workflow"][step_id_to_activate]["status"]
-                        if current_status == "complete":
-                            is_loop = True
-                    
-                    # Process or queue this step
-                    step_status = self._activate_step(session_id, step_id_to_activate, source_step, is_loop)
-                    
-                    # If step was activated but not completed (e.g. pending awaiting input)
-                    # add it to pending steps for next iteration
-                    if step_status == "active" or step_status == "pending":
-                        if step_id_to_activate not in pending_steps:
-                            pending_steps.append(step_id_to_activate)
-                            
-                # Special check for provide-answer step to ensure it runs
-                if "provide-answer" in state["workflow"] and state["workflow"]["provide-answer"]["status"] == "pending":
-                    logger.info("Found provide-answer in pending status, prioritizing it")
-                    if "provide-answer" in pending_steps:
-                        # Move to front of queue
-                        pending_steps.remove("provide-answer")
-                    pending_steps.insert(0, "provide-answer")
-                
-                # Check if all steps are complete 
-                if not pending_steps:
-                    state = manager.get_session_state(session_id)
-                    for step_id, info in state["workflow"].items():
-                        if info["status"] == "active" or info["status"] == "pending":
-                            pending_steps.append(step_id)
-                
-                # Log the current state of all steps            
-                state = manager.get_session_state(session_id)
-                logger.info(f"Current workflow status: {[(s, state['workflow'][s]['status']) for s in state['workflow']]}")
-            
-            # If we hit max iterations, log warning
-            if iterations >= max_iterations:
-                logger.warning(f"Reached maximum iterations ({max_iterations}) for session {session_id}")
-                return "active"  # Still processing
-                
-            # If all steps were processed successfully with no pending steps
-            if not pending_steps:
-                # Check if any step is awaiting input
-                state = manager.get_session_state(session_id)
-                for step_id, info in state["workflow"].items():
-                    if info["status"] == "awaiting_input":
-                        return "awaiting_input"
-                
-                # One more check for next steps before marking as complete
-                next_steps = self._find_next_steps(session_id)
-                if next_steps:
-                    logger.info(f"Found more steps to activate: {[s['step_id'] for s in next_steps]}")
-                    return "active"  # Still have steps to process
+                    # Activate the root step if it's in error or inactive
+                    if state["workflow"]["root"]["status"] in ["error", "pending"]:
+                        logger.info("Activating root step")
+                        def activate_root(current_state):
+                            current_state["workflow"]["root"]["status"] = "active"
+                            return current_state
                         
-                # Otherwise completed
-                return "complete"
+                        self.session_manager.update_session_state(session_id, activate_root)
+                        continue  # Continue to next iteration to process the root step
+                
+                # Before declaring the workflow complete, check for paths from completed steps
+                # This is crucial for continuing the workflow after user input
+                self._update_execution_paths(session_id)
+                
+                # Check again for active steps after updating paths
+                updated_state = self.session_manager.get_session_state(session_id)
+                has_active_steps = False
+                for step_id, info in updated_state["workflow"].items():
+                    if info["status"] == "active":
+                        has_active_steps = True
+                        break
+                
+                # If still no active steps after path evaluation, workflow is complete
+                if not has_active_steps:
+                    logger.info(f"Workflow for session {session_id} is complete (no active steps after path evaluation)")
+                    return "complete"
+                else:
+                    logger.info(f"Found new active steps after path evaluation, continuing workflow")
+                    continue  # Continue to next iteration with the newly activated steps
             
-            # Still processing
-            return "active"
+            # Process each active step
+            all_steps_pending = True
+            status = "active"
             
-        except Exception as e:
-            logger.error(f"Error processing workflow: {e}", exc_info=True)
-            return "error"
+            for step_id in active_steps:
+                logger.info(f"Processing step {step_id}")
+                
+                # Process the step
+                step_status = self._process_step(session_id, step_id)
+                logger.info(f"Step {step_id} processed with status: {step_status}")
+                
+                # Update overall status
+                if step_status == "error":
+                    logger.error(f"Error processing step {step_id}")
+                    status = "error"
+                elif step_status == "awaiting_input":
+                    status = "awaiting_input"
+                    logger.info(f"Step {step_id} is awaiting input")
+                    break  # No need to process further steps when waiting for input
+                elif step_status == "complete":
+                    all_steps_pending = False
+            
+            # If all steps are pending, we need to wait for dependencies
+            if status == "active" and all_steps_pending and active_steps:
+                logger.info("All active steps are pending dependencies, pausing workflow")
+                return "pending"
+            
+            # If a step is awaiting input, pause the workflow
+            if status == "awaiting_input":
+                logger.info("Workflow is awaiting input")
+                return "awaiting_input"
+            
+            # Update execution paths based on completed steps
+            self._update_execution_paths(session_id)
+            
+            # Log detailed state for debugging
+            updated_state = self.session_manager.get_session_state(session_id)
+            logger.info(f"Current workflow step statuses: {[(s, updated_state['workflow'][s]['status']) for s in updated_state['workflow']]}")
+            
+            # Log step outputs
+            if "data" in updated_state and "outputs" in updated_state["data"]:
+                for step_id, outputs in updated_state["data"]["outputs"].items():
+                    logger.info(f"Step {step_id} outputs: {json.dumps(outputs, default=str)[:500]}")
+            
+            # If no more active steps, continue to next iteration which will check for completion
+            # rather than immediately declaring the workflow complete
+        
+        # If we've reached the maximum number of iterations, something might be wrong
+        logger.warning(f"Reached maximum iterations ({MAX_ITERATIONS}) for session {session_id}")
+        return "active"
     
     def _get_active_steps(self, state):
         """Find steps with 'active' status in workflow state"""
@@ -165,120 +146,157 @@ class GraphWorkflowEngine:
         """Process a single workflow step"""
         logger = logging.getLogger(__name__)
         
+        # Get current time for execution timestamp
+        current_time = int(time.time())
+        
         # Get step details from Neo4j
         step_details = self._get_step_details(step_id)
         if not step_details:
             # Handle missing step
+            logger.error(f"Step {step_id} not found in Neo4j")
             self._mark_step_error(session_id, step_id, "Step not found")
             return "error"
         
-        # Skip processing if the step has a function but it's empty
+        # Get function name (might be in 'function' or 'utility' key)
         function_name = step_details.get("function")
-        if function_name is None:
-            logger.info(f"Step {step_id} has no function - treating as successful execution")
-            self._update_step_status(session_id, step_id, "complete")
+        if not function_name:
+            # Step with no function is valid, treat as successful execution
+            logger.info(f"Step {step_id} has no function defined, marking as complete")
+            
+            def mark_complete_empty(state):
+                if step_id not in state["workflow"]:
+                    state["workflow"][step_id] = {}
+                state["workflow"][step_id]["status"] = "complete"
+                state["workflow"][step_id]["error"] = ""
+                state["workflow"][step_id]["last_executed"] = current_time
+                return state
+            
+            self.session_manager.update_session_state(session_id, mark_complete_empty)
             return "complete"
         
-        # Check if this step's input contains variable references
-        # that need to be resolved from session state
-        try:
+        # Get current session state
+        state = self.session_manager.get_session_state(session_id)
+        if not state:
+            logger.error(f"Session {session_id} not found")
+            return "error"
+        
+        # Handle request step (user input) differently
+        if "request" in function_name.lower():
+            logger.info(f"Step {step_id} is a request step, marking as awaiting input")
+            
+            # Get input data
             input_data = step_details.get("input", {})
-            if not input_data:
-                # Empty input is valid for some steps
-                input_data = {}
             
-            # Resolve the variables in the input
+            # Resolve any variables in the input
             from .variable_resolver import resolve_inputs
-            resolved_inputs = resolve_inputs(input_data, self.session_manager.get_session_state(session_id)) or {}
+            input_data = resolve_inputs(input_data, state) or {}
             
-            # Log the resolved inputs for debugging
-            if resolved_inputs:
-                logger.info(f"Resolved inputs for {step_id}: {resolved_inputs}")
-            else:
-                logger.warning(f"No inputs were resolved for step {step_id}")
+            # Store the resolved input as step output
+            def set_awaiting_input(current_state):
+                # Initialize data structure if needed
+                if "data" not in current_state:
+                    current_state["data"] = {}
+                if "outputs" not in current_state["data"]:
+                    current_state["data"]["outputs"] = {}
                 
-                # Check if any required inputs are missing
-                missing_refs = []
-                for key, value in input_data.items():
-                    if isinstance(value, str) and "@{SESSION_ID}." in value:
-                        # This is a variable reference - check if it resolves
-                        parts = value.split("@{SESSION_ID}.", 1)[1].split(".", 1)
-                        if len(parts) > 0:
-                            ref_step = parts[0].split("}")[0]
-                            # Check if referenced step exists and has output
-                            if ref_step not in self.session_manager.get_session_state(session_id).get("data", {}).get("outputs", {}):
-                                missing_refs.append(ref_step)
-                            elif not self.session_manager.get_session_state(session_id)["data"]["outputs"][ref_step]:
-                                missing_refs.append(f"{ref_step} (empty output)")
+                # Initialize step outputs as array if needed
+                if step_id not in current_state["data"]["outputs"]:
+                    current_state["data"]["outputs"][step_id] = []
+                elif not isinstance(current_state["data"]["outputs"][step_id], list):
+                    # Convert existing output to array for backward compatibility
+                    current_state["data"]["outputs"][step_id] = [current_state["data"]["outputs"][step_id]]
                 
-                if missing_refs:
-                    logger.warning(f"Step {step_id} depends on missing outputs: {missing_refs}")
-                    # Mark as pending and wait for dependencies
-                    self._update_step_status(session_id, step_id, "pending")
-                    return "pending"
-        except Exception as e:
-            logger.error(f"Error resolving inputs for step {step_id}: {e}")
-            self._mark_step_error(session_id, step_id, f"Error resolving inputs: {str(e)}")
-            return "error"
-        
-        # Get function reference
-        function_func = self.utility_registry.get_utility(function_name)
-        
-        if not function_func:
-            # Handle missing function
-            logger.error(f"Function not found: {function_name}")
-            self._mark_step_error(session_id, step_id, f"Function not found: {function_name}")
-            return "error"
-        
-        # Special handling for request function
-        if function_name == "utils.request.request":
-            logger.info(f"Step {step_id} is a request function, marking as awaiting input")
-            self._update_step_status(session_id, step_id, "awaiting_input")
-            return "awaiting_input"
-        
-        # Execute function
-        try:
-            # More detailed logging for generate step to help diagnose issues
-            if function_name == "utils.generate.generate":
-                logger.info(f"Executing generate function with inputs: {json.dumps(resolved_inputs, default=str)}")
+                # Add new output to the array, limiting to 5 items
+                current_state["data"]["outputs"][step_id].append(input_data)
+                if len(current_state["data"]["outputs"][step_id]) > 5:
+                    current_state["data"]["outputs"][step_id] = current_state["data"]["outputs"][step_id][-5:]
                 
-                # Check OPENAI_API_KEY is set
-                import os
-                api_key = os.environ.get("OPENAI_API_KEY")
-                if api_key:
-                    masked_key = api_key[:4] + '*' * (len(api_key) - 8) + api_key[-4:]
-                    logger.info(f"OPENAI_API_KEY is set: {masked_key}")
-                else:
-                    logger.error("OPENAI_API_KEY is not set in environment - generate will likely fail")
-            
-            logger.info(f"Executing function: {function_name}")
-            result = function_func(**resolved_inputs)
-            logger.info(f"Result from {function_name}: {result}")
-            
-            # Check for error in result
-            if isinstance(result, dict) and "error" in result:
-                error_message = result.get("error", "Unknown error")
-                logger.error(f"Function returned error: {error_message}")
-                self._mark_step_error(session_id, step_id, error_message)
-                return "error"
-            
-            # Store result in session
-            def update_state(current_state):
-                # Also store the input variables for debugging
-                if isinstance(result, dict) and function_name == "utils.generate.generate":
-                    result["_input_vars"] = resolved_inputs
-                    
-                current_state["data"]["outputs"][step_id] = result
-                current_state["workflow"][step_id]["status"] = "complete"
+                # Set status to awaiting_input
+                if step_id not in current_state["workflow"]:
+                    current_state["workflow"][step_id] = {}
+                current_state["workflow"][step_id]["status"] = "awaiting_input"
+                current_state["workflow"][step_id]["error"] = ""
+                
+                logger.info(f"Set step {step_id} to awaiting_input with input: {input_data}")
                 return current_state
             
-            self.session_manager.update_session_state(session_id, update_state)
+            self.session_manager.update_session_state(session_id, set_awaiting_input)
+            return "awaiting_input"
+        
+        # For all other steps, resolve inputs and execute the function
+        try:
+            # Get the input parameters
+            input_data = step_details.get("input", {})
+            
+            # Resolve variables in the input
+            from .variable_resolver import resolve_inputs
+            resolved_inputs = resolve_inputs(input_data, state)
+            
+            if resolved_inputs is None:
+                logger.warning(f"Unable to resolve required inputs for step {step_id}, marking as pending")
+                
+                # Mark step as pending until inputs are available
+                def mark_pending(current_state):
+                    if step_id not in current_state["workflow"]:
+                        current_state["workflow"][step_id] = {}
+                    current_state["workflow"][step_id]["status"] = "pending"
+                    current_state["workflow"][step_id]["error"] = ""
+                    return current_state
+                
+                self.session_manager.update_session_state(session_id, mark_pending)
+                return "pending"
+            
+            # Get utility function
+            utility_func = self.utility_registry.get_utility(function_name)
+            if not utility_func:
+                error_msg = f"Function not found: {function_name}"
+                logger.error(error_msg)
+                self._mark_step_error(session_id, step_id, error_msg)
+                return "error"
+            
+            # Execute the utility function
+            logger.info(f"Executing function {function_name} for step {step_id}")
+            result = utility_func(**resolved_inputs)
+            logger.info(f"Function {function_name} execution completed")
+            
+            # Store result in session state
+            def update_with_result(current_state):
+                # Initialize data structure if needed
+                if "data" not in current_state:
+                    current_state["data"] = {}
+                if "outputs" not in current_state["data"]:
+                    current_state["data"]["outputs"] = {}
+                
+                # Initialize step outputs as array if needed
+                if step_id not in current_state["data"]["outputs"]:
+                    current_state["data"]["outputs"][step_id] = []
+                elif not isinstance(current_state["data"]["outputs"][step_id], list):
+                    # Convert existing output to array for backward compatibility
+                    current_state["data"]["outputs"][step_id] = [current_state["data"]["outputs"][step_id]]
+                
+                # Add new output to the array, limiting to 5 items
+                current_state["data"]["outputs"][step_id].append(result)
+                if len(current_state["data"]["outputs"][step_id]) > 5:
+                    current_state["data"]["outputs"][step_id] = current_state["data"]["outputs"][step_id][-5:]
+                
+                # Mark step as complete
+                if step_id not in current_state["workflow"]:
+                    current_state["workflow"][step_id] = {}
+                current_state["workflow"][step_id]["status"] = "complete"
+                current_state["workflow"][step_id]["error"] = ""
+                current_state["workflow"][step_id]["last_executed"] = current_time
+                
+                logger.info(f"Step {step_id} completed successfully")
+                return current_state
+            
+            self.session_manager.update_session_state(session_id, update_with_result)
             return "complete"
             
         except Exception as e:
-            # Handle execution error
-            logger.error(f"Error executing step {step_id}: {e}", exc_info=True)
-            self._mark_step_error(session_id, step_id, str(e))
+            # Handle execution errors
+            error_msg = f"Error executing step {step_id}: {str(e)}"
+            logger.exception(error_msg)
+            self._mark_step_error(session_id, step_id, error_msg)
             return "error"
     
     def _get_step_details(self, step_id):
@@ -294,10 +312,10 @@ class GraphWorkflowEngine:
             )
             record = result.single()
             if record:
-                # Check which property is available - prefer utility over function
-                utility = record["utility"]
-                if utility is None:
-                    utility = record["function"]
+                # Check which property is available - prefer function over utility for consistency
+                function_value = record["function"]
+                if function_value is None:
+                    function_value = record["utility"]
                 
                 input_data = record["input"]
                 
@@ -311,144 +329,141 @@ class GraphWorkflowEngine:
                         pass
                 
                 return {
-                    "function": utility,  # Use key 'function' for consistency
+                    "function": function_value,  # Use function as the key consistently
                     "input": input_data
                 }
             return None
     
     def _update_execution_paths(self, session_id):
-        """Identify and activate next steps in the workflow"""
+        """Update workflow execution paths based on completed steps"""
         logger = logging.getLogger(__name__)
-        logger.info(f"Updating execution paths for session {session_id}")
         
-        # Get current state
+        # Get current time for timestamp update
+        current_time = int(time.time())
+        
+        # Get current session state
         state = self.session_manager.get_session_state(session_id)
         if not state:
-            logger.warning(f"Session {session_id} not found when updating execution paths")
+            logger.error(f"Session {session_id} not found")
             return
         
-        # Initialize lists for tracking
-        completed_steps = []
-        next_steps = []
+        # Get last evaluation timestamp, default to 0 if not set
+        last_evaluated = state.get("last_evaluated", 0)
+        logger.info(f"Last path evaluation timestamp: {last_evaluated}")
         
-        # Find completed steps that need to be evaluated
+        # Find steps that were completed since the last evaluation
+        recently_completed_steps = []
         for step_id, info in state["workflow"].items():
-            # Only include steps that are complete and don't have errors
-            if info["status"] == "complete" and not info.get("error"):
-                completed_steps.append(step_id)
+            if info["status"] == "complete":
+                # Check if step has a last_executed timestamp and was completed after last_evaluated
+                step_executed = info.get("last_executed", 0)
+                if step_executed > last_evaluated:
+                    recently_completed_steps.append(step_id)
         
-        if not completed_steps:
-            logger.info("No completed steps found to evaluate for next steps")
+        # If no recently completed steps, try to use all completed steps as a fallback
+        if not recently_completed_steps:
+            logger.info("No recently completed steps, checking all completed steps as fallback")
+            for step_id, info in state["workflow"].items():
+                if info["status"] == "complete":
+                    recently_completed_steps.append(step_id)
+        
+        # If still no steps to process, return
+        if not recently_completed_steps:
+            logger.info("No completed steps to evaluate paths for")
             return
         
-        logger.info(f"Completed steps to evaluate: {completed_steps}")
+        logger.info(f"Found {len(recently_completed_steps)} completed steps to evaluate: {recently_completed_steps}")
         
-        # Find next steps from completed ones
-        for step_id in completed_steps:
-            # Skip any step that has errors
-            if step_id in state["workflow"] and state["workflow"][step_id].get("error"):
-                logger.warning(f"Skipping step with error: {step_id}")
-                continue
-            
-            outgoing = self._get_outgoing_relationships(step_id)
-            logger.info(f"Found {len(outgoing)} outgoing relationships from {step_id}")
-            
-            for rel in outgoing:
-                target_step = rel["target_step"]
-                logger.info(f"Evaluating relationship from {step_id} to {target_step}")
-                
-                # Check if target step exists - don't try to activate non-existent steps
-                target_exists = False
+        # Find all outgoing paths from recently completed steps
+        with self.session_manager.driver.get_session() as session:
+            for step_id in recently_completed_steps:
+                # Use a simpler query that doesn't rely on optional properties
                 try:
-                    step_details = self._get_step_details(target_step)
-                    target_exists = step_details is not None
-                except Exception:
-                    target_exists = False
-                
-                if not target_exists:
-                    logger.warning(f"Target step {target_step} does not exist, skipping")
-                    continue
-                
-                # Check if the target step is already in error state - don't reactivate
-                if target_step in state["workflow"] and state["workflow"][target_step].get("status") == "error":
-                    logger.warning(f"Target step {target_step} has error status, skipping activation")
-                    continue
-                
-                # Evaluate conditions if present
-                conditions_met = True
-                conditions = rel.get("conditions", [])
-                
-                if conditions:
-                    # Resolve each condition
-                    results = []
-                    for condition in conditions:
-                        # Handle conditions with equality operators
-                        value = None
-                        if " == " in condition:
-                            var_ref, expected = condition.split(" == ")
-                            actual = self._resolve_variable_reference(var_ref, state)
+                    # Query outgoing paths with more resilient approach
+                    result = session.run(
+                        """
+                        MATCH (s:STEP {id: $step_id})-[r:NEXT]->(target:STEP)
+                        RETURN target.id as target_id,
+                               r.conditions as conditions,
+                               r.operator as operator
+                        """,
+                        step_id=step_id
+                    )
+                    
+                    # Process each outgoing path
+                    for record in result:
+                        target_id = record["target_id"]
+                        conditions = record.get("conditions") or []
+                        operator = record.get("operator") or "AND"
+                        
+                        logger.info(f"Found path from {step_id} to {target_id}")
+                        
+                        # Skip if target step is already active or awaiting input
+                        # BUT allow reactivation of completed steps for loop support
+                        if (target_id in state["workflow"] and 
+                            state["workflow"][target_id]["status"] in ["active", "awaiting_input"]):
+                            logger.info(f"Target step {target_id} is already {state['workflow'][target_id]['status']}, skipping")
+                            continue
+                        
+                        # Check if target step is in error state
+                        if (target_id in state["workflow"] and 
+                            state["workflow"][target_id]["status"] == "error"):
+                            logger.warning(f"Target step {target_id} is in error state, skipping activation")
+                            continue
+                        
+                        # Evaluate conditions (if any)
+                        should_activate = True
+                        if conditions:
+                            condition_results = []
                             
-                            # Only consider the condition met if there's an actual value
-                            if actual is None:
-                                logger.warning(f"Condition variable {var_ref} resolved to None")
-                                value = False
+                            # Evaluate each condition
+                            for condition in conditions:
+                                if not isinstance(condition, str):
+                                    logger.warning(f"Invalid condition type: {type(condition)}")
+                                    continue
+                                    
+                                # Resolve variable reference
+                                try:
+                                    result = self.variable_resolver.resolve_variable(condition, state)
+                                    condition_results.append(bool(result))
+                                except Exception as e:
+                                    logger.error(f"Error evaluating condition '{condition}': {e}")
+                                    condition_results.append(False)
+                            
+                            # Apply operator logic
+                            if operator.upper() == "AND":
+                                should_activate = all(condition_results)
+                            elif operator.upper() == "OR":
+                                should_activate = any(condition_results)
                             else:
-                                logger.info(f"Comparing {actual} == {expected}")
-                                value = str(actual).lower() == expected.lower()
-                        else:
-                            # Simple boolean evaluation
-                            value = self._resolve_variable_reference(condition, state)
+                                logger.warning(f"Unknown operator '{operator}', defaulting to AND")
+                                should_activate = all(condition_results)
                             
-                            # If the value resolves to None, treat as false
-                            if value is None:
-                                logger.warning(f"Boolean condition {condition} resolved to None")
-                                value = False
+                            logger.info(f"Conditions for {step_id} -> {target_id}: {condition_results} with operator {operator}")
                         
-                        # Convert to boolean and add to results
-                        results.append(bool(value))
-                        
-                    # Apply operator logic
-                    operator = rel.get("operator", "AND")
-                    if operator == "OR":
-                        conditions_met = any(results)
-                    else:  # Default to AND
-                        conditions_met = all(results)
-                
-                logger.info(f"Conditions met for {step_id} -> {target_step}: {conditions_met}")
-                
-                if conditions_met:
-                    # Add to the list of steps to activate if:
-                    # 1. Step isn't already active
-                    # 2. Step isn't already complete 
-                    # 3. Step doesn't have an error
-                    if (target_step not in state["workflow"] or 
-                        (state["workflow"][target_step]["status"] != "active" and 
-                         state["workflow"][target_step]["status"] != "complete" and
-                         state["workflow"][target_step]["status"] != "error")):
-                        next_steps.append(target_step)
+                        # If conditions pass, activate the target step
+                        if should_activate:
+                            logger.info(f"Activating step {target_id} from {step_id}")
+                            
+                            # Update the step status
+                            def activate_target(current_state):
+                                if target_id not in current_state["workflow"]:
+                                    current_state["workflow"][target_id] = {}
+                                current_state["workflow"][target_id]["status"] = "active"
+                                current_state["workflow"][target_id]["error"] = ""
+                                return current_state
+                            
+                            self.session_manager.update_session_state(session_id, activate_target)
+                except Exception as e:
+                    logger.error(f"Error evaluating paths from step {step_id}: {e}")
         
-        # Activate all valid next steps
-        if next_steps:
-            logger.info(f"Found more steps to activate: {next_steps}")
-            
-            def update_state(current_state):
-                for step_id in next_steps:
-                    # Don't activate steps in error state
-                    if step_id in current_state["workflow"] and current_state["workflow"][step_id].get("status") == "error":
-                        continue
-                        
-                    if step_id not in current_state["workflow"]:
-                        current_state["workflow"][step_id] = {
-                            "status": "active",
-                            "error": ""
-                        }
-                    else:
-                        current_state["workflow"][step_id]["status"] = "active"
-                return current_state
-            
-            self.session_manager.update_session_state(session_id, update_state)
+        # Update the last_evaluated timestamp
+        def update_timestamp(current_state):
+            current_state["last_evaluated"] = current_time
+            return current_state
         
-        logger.info(f"Evaluated next steps: {next_steps}")
+        self.session_manager.update_session_state(session_id, update_timestamp)
+        logger.info(f"Updated last_evaluated timestamp to {current_time}")
     
     def _get_outgoing_relationships(self, step_id):
         """Get outgoing NEXT relationships from a step"""
@@ -483,15 +498,21 @@ class GraphWorkflowEngine:
                 })
             return relationships
     
-    def _update_step_status(self, session_id, step_id, status):
-        """Update a step's status in session state"""
+    def _update_step_status(self, session_id, step_id, status, timestamp=None):
+        """Update a step's status in session state with optional timestamp"""
+        if timestamp is None:
+            timestamp = int(time.time())
+        
         def update_state(current_state):
             if step_id in current_state["workflow"]:
                 current_state["workflow"][step_id]["status"] = status
+                if status == "complete":
+                    current_state["workflow"][step_id]["last_executed"] = timestamp
             else:
                 current_state["workflow"][step_id] = {
                     "status": status,
-                    "error": ""
+                    "error": "",
+                    "last_executed": timestamp if status == "complete" else 0
                 }
             return current_state
             
@@ -513,103 +534,75 @@ class GraphWorkflowEngine:
         self.session_manager.update_session_state(session_id, update_state)
     
     def handle_user_input(self, session_id, user_input):
-        """
-        Handle user input for a workflow that's awaiting input
-        
-        Args:
-            session_id: Session ID
-            user_input: User's input data
-            
-        Returns:
-            Updated workflow status
-        """
-        # Initialize logger
+        """Handle user input for the workflow"""
         logger = logging.getLogger(__name__)
-        logger.info(f"Handling user input for session {session_id}")
+        
+        # Get current time for timestamps
+        current_time = int(time.time())
         
         # Get current state
         state = self.session_manager.get_session_state(session_id)
         if not state:
-            raise ValueError(f"Session {session_id} not found")
-            
+            logger.error(f"Session {session_id} not found")
+            return "error"
+        
         # Find step awaiting input
-        awaiting_step = None
+        awaiting_step_id = None
         for step_id, info in state["workflow"].items():
             if info["status"] == "awaiting_input":
-                awaiting_step = step_id
+                awaiting_step_id = step_id
                 break
-                
-        if not awaiting_step:
-            logger.warning(f"No step is awaiting input for session {session_id}")
-            return "completed"
+        
+        if not awaiting_step_id:
+            logger.warning(f"No step is awaiting input in session {session_id}")
+            return "error"
+        
+        logger.info(f"Handling user input for step {awaiting_step_id}: {user_input}")
+        
+        # Store user input and mark step as complete
+        def update_with_user_input(current_state):
+            # Initialize outputs array if needed
+            if "data" not in current_state:
+                current_state["data"] = {}
+            if "outputs" not in current_state["data"]:
+                current_state["data"]["outputs"] = {}
+            if awaiting_step_id not in current_state["data"]["outputs"]:
+                current_state["data"]["outputs"][awaiting_step_id] = []
+            elif not isinstance(current_state["data"]["outputs"][awaiting_step_id], list):
+                # Convert to array for backwards compatibility
+                current_state["data"]["outputs"][awaiting_step_id] = [current_state["data"]["outputs"][awaiting_step_id]]
             
-        logger.info(f"Updating step {awaiting_step} with user input")
-        
-        # Check if there is existing stored input from a previous step
-        # (for example a followup question from generate-answer)
-        existing_question = None
-        
-        if "data" in state and "outputs" in state["data"] and awaiting_step in state["data"]["outputs"]:
-            existing_output = state["data"]["outputs"][awaiting_step]
-            if isinstance(existing_output, dict) and "query" in existing_output:
-                existing_question = existing_output.get("query")
-                logger.info(f"Found existing question in {awaiting_step}: {existing_question}")
-        
-        # Prepare input with response field for compatibility
-        input_data = {"response": user_input}
-        
-        # Store input and mark step as complete
-        def update_state(current_state):
-            # Store result, but preserve any existing fields like 'query' that contain the actual question
-            if awaiting_step in current_state["data"]["outputs"]:
-                # Get existing output and update it
-                existing = current_state["data"]["outputs"][awaiting_step]
-                if isinstance(existing, dict):
-                    # Preserve the existing question/query but update the response
-                    existing.update(input_data)
-                    current_state["data"]["outputs"][awaiting_step] = existing
-                else:
-                    # Just set the input directly
-                    current_state["data"]["outputs"][awaiting_step] = input_data
+            # Get the most recent output
+            output = None
+            if current_state["data"]["outputs"][awaiting_step_id]:
+                output = dict(current_state["data"]["outputs"][awaiting_step_id][-1])
             else:
-                # No existing output, just set the input directly
-                current_state["data"]["outputs"][awaiting_step] = input_data
+                output = {}
+            
+            # Update output with user response
+            output["response"] = user_input
+            
+            # Add as new output in array
+            current_state["data"]["outputs"][awaiting_step_id].append(output)
+            
+            # Limit to 5 most recent outputs
+            if len(current_state["data"]["outputs"][awaiting_step_id]) > 5:
+                current_state["data"]["outputs"][awaiting_step_id] = current_state["data"]["outputs"][awaiting_step_id][-5:]
             
             # Mark step as complete
-            current_state["workflow"][awaiting_step]["status"] = "complete"
+            current_state["workflow"][awaiting_step_id]["status"] = "complete"
+            current_state["workflow"][awaiting_step_id]["last_executed"] = current_time
             
-            # Add to message history
-            if "messages" not in current_state["data"]:
-                current_state["data"]["messages"] = []
-            
-            current_state["data"]["messages"].append({
-                "role": "user",
-                "content": user_input
-            })
-            
+            logger.info(f"Updated step {awaiting_step_id} with user input and marked as complete")
             return current_state
         
-        self.session_manager.update_session_state(session_id, update_state)
-        logger.info(f"User input stored for {awaiting_step}")
+        # Update session state
+        self.session_manager.update_session_state(session_id, update_with_user_input)
         
-        # IMPORTANT: Explicitly check for and activate next steps
-        # This ensures the workflow properly continues after user input
-        next_steps = self._find_next_steps(session_id)
-        if next_steps:
-            logger.info(f"Found steps to activate after user input: {[s['step_id'] for s in next_steps]}")
-            
-            # Activate each next step
-            for next_step in next_steps:
-                step_id_to_activate = next_step["step_id"]
-                source_step = next_step["source_step"]
-                
-                logger.info(f"Activating next step after user input: {step_id_to_activate}")
-                self._activate_step(session_id, step_id_to_activate, source_step, False)
-        else:
-            logger.warning(f"No next steps found after handling user input for {awaiting_step}")
+        # Immediately update execution paths to activate downstream steps
+        self._update_execution_paths(session_id)
         
-        # Resume workflow processing with active status to trigger step evaluation
-        logger.info(f"Resuming workflow processing for session {session_id}")
+        # Return active status to signal that workflow should continue processing
         return "active"
 
     def _find_next_steps(self, session_id):

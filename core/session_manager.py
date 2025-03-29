@@ -4,8 +4,11 @@ Session management for workflow execution.
 
 import json
 import uuid
+import logging
 from datetime import datetime
 from .database import get_neo4j_driver
+
+logger = logging.getLogger(__name__)
 
 class SessionManager:
     def __init__(self, neo4j_driver=None):
@@ -22,11 +25,13 @@ class SessionManager:
             "workflow": {
                 "root": {
                     "status": "active",
-                    "error": ""
+                    "error": "",
+                    "last_executed": 0
                 }
             },
+            "last_evaluated": 0,  # Initial timestamp for path evaluation
             "data": {
-                "outputs": {},
+                "outputs": {},  # Will store arrays of step outputs
                 "messages": []
             }
         }
@@ -36,15 +41,16 @@ class SessionManager:
             session.run(
                 """
                 CREATE (s:SESSION {
-                    id: $id, 
-                    state: $state, 
+                    id: $id,
+                    state: $state,
                     created_at: datetime()
                 })
                 """,
                 id=session_id,
                 state=json.dumps(initial_state)
             )
-            
+        
+        logger.info(f"Created new session {session_id} with workflow {workflow_id}")
         return session_id
         
     def get_session_state(self, session_id):

@@ -95,7 +95,29 @@ def generate(model="gpt-4o-mini", temperature=0.7, system=None, user=None, inclu
                     if directly_set_reply and "response" in function_args:
                         function_args["message"] = function_args["response"]
                         function_args["content"] = function_args["response"]
+                    
+                    # Generic schema validation (field-agnostic)
+                    if schema and "properties" in schema and "required" in schema:
+                        missing_fields = []
+                        for field in schema["required"]:
+                            if field not in function_args:
+                                missing_fields.append(field)
+                                # Add reasonable defaults based on field type
+                                if field in schema["properties"]:
+                                    prop_type = schema["properties"][field].get("type")
+                                    if prop_type == "boolean":
+                                        function_args[field] = True
+                                    elif prop_type == "string":
+                                        function_args[field] = f"Default {field} value"
+                                    elif prop_type == "number" or prop_type == "integer":
+                                        function_args[field] = 0
+                                    else:
+                                        function_args[field] = None
                         
+                        if missing_fields:
+                            logger.warning(f"Model response missing required fields: {missing_fields}. Added defaults.")
+                    
+                    logger.info(f"Function response fields: {list(function_args.keys())}")
                     return function_args
                 except Exception as e:
                     logger.error(f"Error parsing function call arguments: {e}")
@@ -113,10 +135,46 @@ def generate(model="gpt-4o-mini", temperature=0.7, system=None, user=None, inclu
                     return {
                         "response": text,
                         "message": text,
-                        "content": text,
-                        "merits_followup": kwargs.get("merits_followup", True)
+                        "content": text
                     }
+                
+                # If schema exists, create structured response following schema requirements
+                if schema and "properties" in schema:
+                    # Build response with text in "response" field if it exists in schema
+                    structured_response = {}
                     
+                    # Try to place the text in the most appropriate field
+                    if "response" in schema["properties"]:
+                        structured_response["response"] = text
+                    elif "content" in schema["properties"]:
+                        structured_response["content"] = text
+                    elif "message" in schema["properties"]:
+                        structured_response["message"] = text
+                    else:
+                        # Just use the first string property
+                        for field, prop in schema["properties"].items():
+                            if prop.get("type") == "string":
+                                structured_response[field] = text
+                                break
+                    
+                    # Add required fields with defaults based on their types
+                    if "required" in schema:
+                        for field in schema["required"]:
+                            if field not in structured_response and field in schema["properties"]:
+                                prop_type = schema["properties"][field].get("type")
+                                if prop_type == "boolean":
+                                    structured_response[field] = True
+                                elif prop_type == "string":
+                                    structured_response[field] = f"Default {field} value"
+                                elif prop_type == "number" or prop_type == "integer":
+                                    structured_response[field] = 0
+                                else:
+                                    structured_response[field] = None
+                    
+                    logger.info(f"Created structured response with fields: {list(structured_response.keys())}")
+                    return structured_response
+                
+                # No schema provided, return text as-is
                 return text
                 
         except Exception as e:

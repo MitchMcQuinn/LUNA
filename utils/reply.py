@@ -8,20 +8,17 @@ logger = logging.getLogger(__name__)
 
 def reply(message=None, content=None, end_session=False, **kwargs):
     """
-    Send a message to the user
+    Send a message to the user.
     
     Args:
-        message: Message text to display
-        content: Alternative to message, for compatibility
-        end_session: Whether to end the session after reply
-        **kwargs: Additional parameters
+        message: Message text to send
+        content: Alternative message content (lower priority than message)
+        end_session: Whether to end the session after this message
+        **kwargs: Additional parameters to include in the result
         
     Returns:
         Result containing the message
     """
-    print(f"DEBUG REPLY - Received message param: '{message}'")
-    print(f"DEBUG REPLY - Received content param: '{content}'")
-    
     # Use either message or content
     text = message or content
     

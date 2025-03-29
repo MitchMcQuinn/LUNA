@@ -129,6 +129,8 @@
     <script>
         // Store the current session ID
         let currentSessionId = null;
+        // Keep track of displayed message content to avoid duplicates
+        let displayedMessageContents = new Set();
 
         // Function to create a new session
         async function createSession() {
@@ -146,17 +148,19 @@
                 const data = await response.json();
                 currentSessionId = data.session_id;
                 
-                // Clear existing messages
+                // Clear existing messages and reset tracking
                 document.getElementById('chatMessages').innerHTML = '';
+                displayedMessageContents = new Set();
                 
                 // Update the UI with any messages
                 if (data.messages && data.messages.length > 0) {
                     data.messages.forEach(message => {
-                        addMessage(message.role, message.content);
+                        addMessageWithDeduplication(message.role, message.content);
                     });
                 }
                 
-                // Check if waiting for input
+                // Handle awaiting_input from initial session creation
+                // This should now be safe since we've already added messages above
                 if (data.awaiting_input) {
                     handleAwaitingInput(data.awaiting_input);
                 }
@@ -177,8 +181,8 @@
             }
             
             try {
-                // Display user message immediately
-                addMessage('user', message);
+                // Display user message immediately and add to tracking
+                addMessageWithDeduplication('user', message);
                 
                 // Clear input field
                 document.getElementById('messageInput').value = '';
@@ -197,25 +201,25 @@
                 const data = await response.json();
                 console.log('Server response:', data);
                 
-                // Display all assistant messages
+                // Display all assistant messages with deduplication
                 if (data.messages && data.messages.length > 0) {
-                    // Find all assistant messages - don't limit to just one
-                    const assistantMessages = data.messages.filter(m => m.role === 'assistant');
-                    console.log('Assistant messages:', assistantMessages);
+                    // Find all assistant messages that came after the user message we just sent
+                    const userMessageIndex = data.messages.findIndex(m => 
+                        m.role === 'user' && m.content === message);
                     
-                    // Get existing assistant messages in the UI
-                    const existingMessages = document.querySelectorAll('.message.assistant');
-                    const existingContents = Array.from(existingMessages).map(el => el.textContent);
-                    
-                    // Display any new assistant messages not already shown
-                    assistantMessages.forEach(message => {
-                        if (!existingContents.includes(message.content)) {
-                            addMessage('assistant', message.content);
-                        }
-                    });
+                    if (userMessageIndex !== -1) {
+                        // Get messages that follow this user message 
+                        const newMessages = data.messages.slice(userMessageIndex + 1);
+                        
+                        // Display each message with deduplication
+                        newMessages.forEach(message => {
+                            addMessageWithDeduplication(message.role, message.content);
+                        });
+                    }
                 }
                 
-                // Check if waiting for input
+                // Check if waiting for input 
+                // This should now be safe since we've already added messages above
                 if (data.awaiting_input) {
                     handleAwaitingInput(data.awaiting_input);
                 }
@@ -228,8 +232,18 @@
             }
         }
 
-        // Function to add a message to the chat
-        function addMessage(role, content) {
+        // Function to add a message to the chat with deduplication
+        function addMessageWithDeduplication(role, content) {
+            // Skip if we've already displayed this message
+            if (displayedMessageContents.has(content)) {
+                console.log(`Skipping duplicate message: ${content.substring(0, 30)}...`);
+                return;
+            }
+            
+            // Add this message to our tracking set
+            displayedMessageContents.add(content);
+            
+            // Create and display the message
             const messagesContainer = document.getElementById('chatMessages');
             const messageElement = document.createElement('div');
             messageElement.className = `message ${role}`;
@@ -238,6 +252,8 @@
             
             // Scroll to bottom
             messagesContainer.scrollTop = messagesContainer.scrollHeight;
+            
+            console.log(`Added message (${role}): ${content.substring(0, 30)}...`); 
         }
 
         // Function to handle awaiting input
@@ -281,8 +297,9 @@
             }
             
             // Show the prompt message if available
+            // This should now be safe because we're using deduplication
             if (inputData.prompt) {
-                addMessage('assistant', inputData.prompt);
+                addMessageWithDeduplication('assistant', inputData.prompt);
             }
         }
 
