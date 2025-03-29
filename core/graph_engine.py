@@ -65,14 +65,36 @@ class GraphWorkflowEngine:
                 
                 # If still no active steps after path evaluation, we need to decide if the conversation should end
                 if not has_active_steps:
-                    # Check if reply step is complete and had a chance to evaluate merits_followup
+                    # Check if any reply function step is complete
                     reply_is_complete = False
-                    if "reply" in updated_state["workflow"]:
-                        reply_is_complete = updated_state["workflow"]["reply"]["status"] == "complete"
+                    
+                    # Get functions for completed steps
+                    completed_steps = [step_id for step_id, info in updated_state["workflow"].items() 
+                                     if info["status"] == "complete"]
+                    
+                    if completed_steps:
+                        with self.session_manager.driver.get_session() as session:
+                            for step_id in completed_steps:
+                                result = session.run(
+                                    """
+                                    MATCH (s:STEP {id: $id})
+                                    RETURN s.utility as utility, s.function as function
+                                    """,
+                                    id=step_id
+                                )
+                                record = result.single()
+                                if record:
+                                    # Use function if available, otherwise utility for compatibility
+                                    function_value = record["function"]
+                                    if function_value is None:
+                                        function_value = record["utility"]
+                                    if function_value and "reply" in function_value.lower():
+                                        reply_is_complete = True
+                                        break
                     
                     # If reply is complete, the conversation has likely ended naturally
                     if reply_is_complete:
-                        logger.info(f"Workflow for session {session_id} is complete (reply step is complete and no active steps)")
+                        logger.info(f"Workflow for session {session_id} is complete (reply function step is complete and no active steps)")
                         return "complete"
                         
                     # If reply isn't complete, we might need to activate root
