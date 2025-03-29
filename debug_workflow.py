@@ -1,318 +1,231 @@
+#!/usr/bin/env python
 """
-Debug script to identify workflow parameter mapping issues
+Diagnostic script to debug workflow execution and cypher utility.
 """
 
+import os
+import sys
 import json
 import logging
-import re
-import sys
-from neo4j import GraphDatabase
+from dotenv import load_dotenv
 
-# Set up logging
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
-logger = logging.getLogger("debug")
+# Configure logging
+logging.basicConfig(level=logging.DEBUG, 
+                   format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+logger = logging.getLogger(__name__)
 
-# Neo4j connection details - adjust as needed
-NEO4J_URI = "neo4j://localhost:7687"
-NEO4J_USER = "neo4j"
-NEO4J_PASSWORD = "password"
+# Set up paths
+script_dir = os.path.dirname(os.path.abspath(__file__))
+sys.path.append(script_dir)
 
-def get_step_details(driver, step_id):
-    """Get step details from Neo4j"""
-    with driver.session() as session:
-        result = session.run(
-            """
-            MATCH (s:STEP {id: $id})
+# Load environment variables
+env_path = os.path.join(os.getcwd(), '.env.local')
+if os.path.exists(env_path):
+    load_dotenv(env_path)
+    logger.info(f"Loaded environment from: {env_path}")
+else:
+    logger.warning(f"No .env.local found at {env_path}")
+
+# Import core components
+try:
+    from core.session_manager import get_session_manager
+    from core.graph_engine import get_graph_workflow_engine
+    logger.info("Successfully imported core components")
+except ImportError as e:
+    logger.error(f"Failed to import components: {e}")
+    sys.exit(1)
+
+def inspect_recent_sessions():
+    """Inspect the most recent workflow sessions for debugging."""
+    session_manager = get_session_manager()
+    
+    with session_manager.driver.get_session() as session:
+        print("\n=== RECENT SESSIONS ===")
+        result = session.run("""
+            MATCH (s:SESSION)
+            RETURN s.id as id, s.state as state
+            ORDER BY s.created_at DESC
+            LIMIT 5
+        """)
+        
+        for record in result:
+            session_id = record["id"]
+            state_json = record["state"]
+            
+            if not state_json:
+                continue
+                
+            try:
+                state = json.loads(state_json)
+                print(f"\nSESSION: {session_id}")
+                
+                # Print workflow steps and status
+                print("\n  STEP STATUS:")
+                for step_id, info in state.get("workflow", {}).items():
+                    status = info.get("status", "unknown")
+                    error = info.get("error", "")
+                    print(f"    {step_id}: {status}" + (f" - ERROR: {error}" if error else ""))
+                
+                # Look specifically for movie_info step activation
+                if "movie_info" in state.get("workflow", {}):
+                    print("\n  MOVIE_INFO STEP DETAILS:")
+                    movie_info_status = state["workflow"]["movie_info"].get("status", "unknown")
+                    print(f"    Status: {movie_info_status}")
+                    
+                    # Check for output from movie_info step
+                    if "movie_info" in state.get("data", {}).get("outputs", {}):
+                        movie_output = state["data"]["outputs"]["movie_info"]
+                        print(f"    Output: {json.dumps(movie_output, indent=2)}")
+    else:
+                        print("    No output found")
+                        
+                    # If there's an error, show it
+                    if movie_info_status == "error":
+                        error = state["workflow"]["movie_info"].get("error", "No error message")
+                        print(f"    Error: {error}")
+                else:
+                    print("\n  MOVIE_INFO step was never activated")
+                
+                # Check if generate step had is_movie_question
+                if "generate" in state.get("data", {}).get("outputs", {}):
+                    generate_outputs = state["data"]["outputs"]["generate"]
+                    if isinstance(generate_outputs, list) and generate_outputs:
+                        latest_output = generate_outputs[-1]
+                        if "is_movie_question" in latest_output:
+                            print(f"\n  GENERATE step is_movie_question: {latest_output['is_movie_question']}")
+                        else:
+                            print("\n  GENERATE step did not include is_movie_question in output")
+                
+                # Look at user messages to identify movie-related queries
+                messages = state.get("data", {}).get("messages", [])
+                user_messages = [m for m in messages if m.get("role") == "user"]
+                if user_messages:
+                    print("\n  USER MESSAGES:")
+                    for msg in user_messages[-3:]:  # Show last 3 messages
+                        content = msg.get("content", "")
+                        print(f"    User: {content}")
+            except Exception as e:
+                print(f"Error parsing session {session_id}: {e}")
+
+def inspect_workflow_nodes():
+    """Inspect workflow nodes and relationships to ensure correct setup."""
+    session_manager = get_session_manager()
+    
+    with session_manager.driver.get_session() as session:
+        print("\n=== WORKFLOW NODES AND RELATIONSHIPS ===")
+        
+        # Check for movie_info step
+        result = session.run("""
+            MATCH (s:STEP {id: 'movie_info'})
             RETURN s.function as function, s.input as input
-            """,
-            id=step_id
-        )
+        """)
+        
         record = result.single()
         if record:
-            input_data = record["input"]
-            function_name = record["function"]
+            function = record["function"]
+            input_str = record["input"]
             
-            # Try to parse input as JSON if it's a string
-            if isinstance(input_data, str):
-                try:
-                    input_data = json.loads(input_data)
-                except:
-                    pass
-                    
-            return {
-                "function": function_name,
-                "input": input_data
-            }
-        return None
-
-def get_workflow_details(driver):
-    """Get all steps and connections in the workflow"""
-    with driver.session() as session:
-        # Get all steps
-        steps = session.run(
-            """
-            MATCH (s:STEP)
-            RETURN s.id as id, s.function as function, s.input as input
-            """
-        ).data()
-        
-        # Get all connections
-        connections = session.run(
-            """
-            MATCH (s1:STEP)-[r:NEXT]->(s2:STEP)
-            RETURN s1.id as source, s2.id as target, r.conditions as conditions
-            """
-        ).data()
-        
-        return {"steps": steps, "connections": connections}
-
-def build_sample_session_state():
-    """Build a sample session state with request step output"""
-    return {
-        "id": "test-session",
-        "workflow": {
-            "root": {"status": "complete"},
-            "request": {"status": "complete"},
-            "generate": {"status": "active"},
-            "reply": {"status": "pending"}
-        },
-        "data": {
-            "outputs": {
-                "request": [
-                    {
-                        "prompt": "GM! How can I help?",
-                        "response": "Tell me about space"
-                    }
-                ]
-            }
-        }
-    }
-
-def debug_variable_resolution(var_reference, session_state):
-    """Debug variable resolution process"""
-    logger.info(f"Attempting to resolve: {var_reference}")
-    
-    # Extract default value if present
-    default_value = None
-    if "|" in var_reference:
-        var_parts = var_reference.split("|", 1)
-        var_reference = var_parts[0].strip()
-        default_value = var_parts[1].strip()
-        logger.info(f"Found default value: {default_value}")
-    
-    # Check if this is a variable reference
-    if not var_reference.startswith('@{SESSION_ID}'):
-        logger.info(f"Not a variable reference: {var_reference}")
-        return var_reference
-    
-    # Extract the path after '@{SESSION_ID}.'
-    if '.' not in var_reference:
-        logger.info(f"Invalid variable reference (missing path): {var_reference}")
-        return default_value
-    
-    # Get the path part after @{SESSION_ID}.
-    path = var_reference.split('@{SESSION_ID}.', 1)[1]
-    logger.info(f"Extracted path: {path}")
-    
-    # Split path into parts (step_id and field)
-    path_parts = path.split('.', 1)
-    logger.info(f"Path parts: {path_parts}")
-    
-    # First part is the step_id
-    step_id = path_parts[0]
-    logger.info(f"Referenced step: {step_id}")
-    
-    # Check for indexed access - e.g., step_id[2]
-    index = None
-    if '[' in step_id and ']' in step_id:
-        match = re.search(r'(.+)\[(\d+)\]', step_id)
-        if match:
-            step_id = match.group(1)
-            index = int(match.group(2))
-            logger.info(f"Found indexed access: step_id={step_id}, index={index}")
-    
-    # Check if step exists in state
-    if step_id in session_state.get("workflow", {}):
-        step_status = session_state["workflow"][step_id]["status"]
-        logger.info(f"Step {step_id} status: {step_status}")
-    else:
-        logger.warning(f"Step {step_id} not found in workflow state")
-    
-    # Get the step's outputs
-    if 'data' not in session_state or 'outputs' not in session_state['data']:
-        logger.warning(f"Session state missing data.outputs section")
-        return default_value
-    
-    if step_id not in session_state['data']['outputs']:
-        logger.warning(f"Step {step_id} not found in outputs")
-        return default_value
-    
-    # Get the step output
-    step_outputs = session_state['data']['outputs'][step_id]
-    logger.info(f"Step {step_id} outputs: {step_outputs}")
-    
-    # Handle array-based outputs
-    if isinstance(step_outputs, list):
-        if not step_outputs:
-            logger.warning(f"Step {step_id} has empty outputs array")
-            return default_value
-        
-        # Use indexed access or most recent
-        if index is not None:
-            if 0 <= index < len(step_outputs):
-                step_output = step_outputs[index]
-                logger.info(f"Using indexed output {index} for step {step_id}")
-            else:
-                logger.warning(f"Index {index} out of range for step {step_id}")
-                return default_value
+            print("\nMOVIE_INFO STEP:")
+            print(f"  Function: {function}")
+            print(f"  Input: {input_str}")
+            
+            try:
+                input_data = json.loads(input_str)
+                print(f"  Parsed Input: {json.dumps(input_data, indent=2)}")
+            except:
+                print("  Failed to parse input as JSON")
         else:
-            # Use most recent output
-            step_output = step_outputs[-1]
-            logger.info(f"Using most recent output for step {step_id}")
-    else:
-        # For backward compatibility, handle non-array outputs
-        step_output = step_outputs
-        logger.info(f"Using non-array output for step {step_id}")
-    
-    # If there's a field path, extract the field value
-    if len(path_parts) > 1:
-        field_path = path_parts[1].split('.')
-        current_value = step_output
+            print("\nMOVIE_INFO step not found in database")
         
-        for field in field_path:
-            logger.info(f"Accessing field: {field}")
-            if isinstance(current_value, dict) and field in current_value:
-                current_value = current_value[field]
-                logger.info(f"Field value: {current_value}")
-            else:
-                logger.warning(f"Field {field} not found in output for step {step_id}")
-                if isinstance(current_value, dict):
-                    logger.info(f"Available fields: {list(current_value.keys())}")
-                return default_value
+        # Check conditions on relationships
+        result = session.run("""
+            MATCH (generate:STEP {id: 'generate'})-[r:NEXT]->(target:STEP)
+            RETURN target.id as target, r.conditions as conditions, r.priority as priority
+            ORDER BY priority
+        """)
         
-        logger.info(f"Final resolved value: {current_value}")
-        return current_value
-    else:
-        # No field specified, return the entire step output
-        logger.info(f"Returning full step output: {step_output}")
-        return step_output
+        print("\nGENERATE STEP OUTGOING RELATIONSHIPS:")
+        for record in result:
+            target = record["target"]
+            conditions = record["conditions"]
+            priority = record["priority"]
+            
+            print(f"  → {target}")
+            print(f"    Conditions: {conditions}")
+            print(f"    Priority: {priority}")
 
-def debug_generate_function(user_input):
-    """Debug the generate function with manual input"""
-    from utils.generate import generate
-    
-    logger.info(f"Testing generate function with user input: '{user_input}'")
-    result = generate(user=user_input)
-    logger.info(f"Generate function result: {result}")
-    return result
+def patch_cypher_utility():
+    """Add debug logging to cypher.py utility."""
+    print("\n=== ADDING DEBUG LOGGING TO CYPHER UTILITY ===")
+    print("To add debug logging, edit utils/cypher.py to add more detailed logging statements.")
+    print("Specifically look at:")
+    print("1. execute_cypher - Add logging before and after variable resolution")
+    print("2. generate_cypher_query - Log the exact query being generated")
+    print("3. execute_query - Log parameters and query execution details")
 
-def manual_workflow_test():
-    """Simulate the workflow with manual steps"""
-    # Create a sample state
-    session_state = build_sample_session_state()
-    
-    # Test request step
-    logger.info("===== TESTING REQUEST STEP =====")
-    request_output = session_state["data"]["outputs"]["request"][-1]
-    logger.info(f"Request step output: {request_output}")
+def run_test_query():
+    """Run a test query directly using the cypher utility."""
+    print("\n=== RUNNING TEST QUERY ===")
     
     try:
-        # Import generate function
-        from utils.generate import generate
+        from utils.cypher import execute_cypher
         
-        # Get the user input
-        user_input = request_output.get("response")
-        logger.info(f"User input from request: {user_input}")
+        # Get a session ID to use for variable resolution
+        session_manager = get_session_manager()
+        with session_manager.driver.get_session() as session:
+            result = session.run("""
+                MATCH (s:SESSION)
+                RETURN s.id as id
+                ORDER BY s.created_at DESC
+                LIMIT 1
+            """)
+            session_id = result.single()["id"]
         
-        # Call generate directly
-        logger.info("Calling generate function directly")
-        result = generate(user=user_input)
-        logger.info(f"Generate result: {result}")
+        print(f"Using session ID: {session_id}")
         
-        # Update session state
-        session_state["data"]["outputs"]["generate"] = [result]
+        # Test with direct query
+        test_result = execute_cypher(
+            query="MATCH (m:Movie) WHERE m.title CONTAINS 'Fight' RETURN m"
+        )
+        print("\nDirect Query Test Result:")
+        print(f"Query: {test_result.get('query')}")
+        print(f"Result: {json.dumps(test_result.get('result'), indent=2)}")
+        print(f"Overview: {test_result.get('overview')}")
         
-        # Test reply step (normally would use the generate output)
-        logger.info("===== TESTING REPLY STEP =====")
-        if isinstance(result, dict) and "response" in result:
-            message = result["response"]
-        elif isinstance(result, dict) and "message" in result:
-            message = result["message"]
-        else:
-            message = str(result)
-            
-        logger.info(f"Message for reply: {message}")
+        # Test with parameterized query
+        test_result = execute_cypher(
+            query="MATCH (m:Movie {title: $title}) RETURN m",
+            title="Fight Club"
+        )
+        print("\nParameterized Query Test Result:")
+        print(f"Query: {test_result.get('query')}")
+        print(f"Result: {json.dumps(test_result.get('result'), indent=2)}")
+        print(f"Overview: {test_result.get('overview')}")
         
-        # Import reply function
-        from utils.reply import reply
+        # Test with instruction
+        test_result = execute_cypher(
+            instruction="Find all information about the movie Fight Club",
+        )
+        print("\nInstruction Test Result:")
+        print(f"Query: {test_result.get('query')}")
+        print(f"Result: {json.dumps(test_result.get('result'), indent=2)}")
+        print(f"Overview: {test_result.get('overview')}")
         
-        # Call reply directly
-        reply_result = reply(message=message)
-        logger.info(f"Reply result: {reply_result}")
-        
-    except Exception as e:
-        logger.error(f"Error in manual workflow test: {e}", exc_info=True)
-
-def main():
-    try:
-        logger.info("Starting workflow debug script")
-        
-        # Connect to Neo4j
-        driver = GraphDatabase.driver(NEO4J_URI, auth=(NEO4J_USER, NEO4J_PASSWORD))
-        
-        # Check the generate step configuration
-        logger.info("===== CHECKING GENERATE STEP CONFIG =====")
-        generate_step = get_step_details(driver, "generate")
-        if generate_step:
-            logger.info(f"Generate step function: {generate_step['function']}")
-            logger.info(f"Generate step input: {generate_step['input']}")
-            
-            # Check input parameters
-            if isinstance(generate_step['input'], dict):
-                for key, value in generate_step['input'].items():
-                    logger.info(f"Parameter '{key}': {value}")
-                    
-                    # Check if this is supposed to reference the request.response
-                    if isinstance(value, str) and 'request.response' in value:
-                        logger.info(f"Found reference to request.response in parameter '{key}'")
-                        
-                        # Test variable resolution
-                        sample_state = build_sample_session_state()
-                        resolved = debug_variable_resolution(value, sample_state)
-                        logger.info(f"Resolved value: {resolved}")
-                        
-                        # Check if the key is what generate function expects ("user")
-                        if key != "user":
-                            logger.warning(f"Parameter key '{key}' doesn't match what generate function expects ('user')")
-                            logger.info("This is likely the issue - the parameter mapping is incorrect in Neo4j")
-        else:
-            logger.error("Generate step not found in Neo4j database")
-        
-        # Get the workflow details
-        logger.info("===== CHECKING WORKFLOW STRUCTURE =====")
-        workflow = get_workflow_details(driver)
-        logger.info(f"Found {len(workflow['steps'])} steps in workflow")
-        for step in workflow['steps']:
-            logger.info(f"Step ID: {step['id']}, Function: {step['function']}")
-            if step['id'] == 'generate':
-                logger.info(f"Generate step input: {step['input']}")
-        
-        logger.info(f"Found {len(workflow['connections'])} connections in workflow")
-        for conn in workflow['connections']:
-            logger.info(f"Connection: {conn['source']} -> {conn['target']}")
-        
-        # Run a manual workflow test
-        logger.info("===== RUNNING MANUAL WORKFLOW TEST =====")
-        manual_workflow_test()
-        
-        driver.close()
-        logger.info("Debug script completed")
+        # Test with more complex query to retrieve actors
+        test_result = execute_cypher(
+            instruction="Find the movie Fight Club and all actors who starred in it",
+            ontology="The graph contains Movie nodes with properties (title, year, description) and Person nodes with properties (name, age). Persons are connected to Movies via ACTED_IN relationships."
+        )
+        print("\nActor Relationship Test Result:")
+        print(f"Query: {test_result.get('query')}")
+        print(f"Result: {json.dumps(test_result.get('result'), indent=2)}")
+        print(f"Overview: {test_result.get('overview')}")
         
     except Exception as e:
-        logger.error(f"Error in debug script: {e}", exc_info=True)
-        return 1
-    
-    return 0
+        print(f"Error running test query: {e}")
 
 if __name__ == "__main__":
-    sys.exit(main()) 
+    inspect_recent_sessions()
+    inspect_workflow_nodes()
+    patch_cypher_utility()
+    run_test_query() 
