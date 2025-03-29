@@ -51,19 +51,7 @@ class GraphWorkflowEngine:
             
             # If no active steps, check if we need to activate the root step
             if not active_steps:
-                # Check if root step exists and is not already completed
-                if "root" in state["workflow"] and state["workflow"]["root"]["status"] != "complete":
-                    # Activate the root step if it's in error or inactive
-                    if state["workflow"]["root"]["status"] in ["error", "pending"]:
-                        logger.info("Activating root step")
-                        def activate_root(current_state):
-                            current_state["workflow"]["root"]["status"] = "active"
-                            return current_state
-                        
-                        self.session_manager.update_session_state(session_id, activate_root)
-                        continue  # Continue to next iteration to process the root step
-                
-                # Before declaring the workflow complete, check for paths from completed steps
+                # Update execution paths to see if any completed steps should activate new ones
                 # This is crucial for continuing the workflow after user input
                 self._update_execution_paths(session_id)
                 
@@ -75,8 +63,31 @@ class GraphWorkflowEngine:
                         has_active_steps = True
                         break
                 
-                # If still no active steps after path evaluation, workflow is complete
+                # If still no active steps after path evaluation, we need to decide if the conversation should end
                 if not has_active_steps:
+                    # Check if reply step is complete and had a chance to evaluate merits_followup
+                    reply_is_complete = False
+                    if "reply" in updated_state["workflow"]:
+                        reply_is_complete = updated_state["workflow"]["reply"]["status"] == "complete"
+                    
+                    # If reply is complete, the conversation has likely ended naturally
+                    if reply_is_complete:
+                        logger.info(f"Workflow for session {session_id} is complete (reply step is complete and no active steps)")
+                        return "complete"
+                        
+                    # If reply isn't complete, we might need to activate root
+                    elif "root" in updated_state["workflow"] and updated_state["workflow"]["root"]["status"] != "complete":
+                        # Activate the root step if it's in error or inactive
+                        if updated_state["workflow"]["root"]["status"] in ["error", "pending"]:
+                            logger.info("Activating root step")
+                            def activate_root(current_state):
+                                current_state["workflow"]["root"]["status"] = "active"
+                                return current_state
+                            
+                            self.session_manager.update_session_state(session_id, activate_root)
+                            continue  # Continue to next iteration to process the root step
+                    
+                    # If no active steps and no good reason to continue, the workflow is complete
                     logger.info(f"Workflow for session {session_id} is complete (no active steps after path evaluation)")
                     return "complete"
                 else:
@@ -363,6 +374,41 @@ class GraphWorkflowEngine:
         # If no recently completed steps, try to use all completed steps as a fallback
         if not recently_completed_steps:
             logger.info("No recently completed steps, checking all completed steps as fallback")
+            
+            # Check if we have a reply step that already evaluated merits_followup as false
+            completion_check_already_run = False
+            
+            # Look for evidence that a reply->request path with conditions was already evaluated to false
+            for step_id, info in state["workflow"].items():
+                if step_id == "reply" and info["status"] == "complete":
+                    # Check if reply step is complete and merits_followup condition was checked
+                    path_records = []
+                    with self.session_manager.driver.get_session() as session:
+                        try:
+                            result = session.run(
+                                """
+                                MATCH (s:STEP {id: 'reply'})-[r:NEXT]->(target:STEP {id: 'request'})
+                                WHERE r.conditions IS NOT NULL
+                                RETURN r.conditions as conditions
+                                """)
+                            path_records = list(result)
+                        except Exception as e:
+                            logger.error(f"Error checking reply->request path conditions: {e}")
+                    
+                    # If there's a conditional path from reply to request, we should respect its evaluation
+                    if path_records and len(path_records) > 0:
+                        logger.info("Found conditional path from reply->request that was already evaluated")
+                        # If we're here and there are no active steps, it means the condition was false
+                        # (otherwise request would be active)
+                        if any("merits_followup" in str(record.get("conditions", "")) for record in path_records):
+                            logger.info("merits_followup condition exists and was likely false, ending conversation")
+                            completion_check_already_run = True
+            
+            if completion_check_already_run:
+                logger.info("Not activating any steps - conversation naturally ended")
+                return
+                
+            # Standard fallback if not a condition-based completion
             for step_id, info in state["workflow"].items():
                 if info["status"] == "complete":
                     recently_completed_steps.append(step_id)
