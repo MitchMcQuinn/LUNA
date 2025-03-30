@@ -24,6 +24,38 @@ class GraphWorkflowEngine:
             'resolve_variables': resolve_inputs
         })
         
+    def _parse_condition_string(self, condition_string):
+        """
+        Parse a condition string that might be a JSON array.
+        
+        Args:
+            condition_string: String that might be a JSON array of conditions
+            
+        Returns:
+            List of conditions (either strings or dicts)
+        """
+        logger = logging.getLogger(__name__)
+        
+        if not isinstance(condition_string, str):
+            return condition_string if isinstance(condition_string, list) else [condition_string]
+            
+        try:
+            # Check if it looks like a JSON array
+            if condition_string.strip().startswith('[') and condition_string.strip().endswith(']'):
+                parsed_condition = json.loads(condition_string)
+                if isinstance(parsed_condition, list):
+                    logger.info(f"Successfully parsed JSON condition: {parsed_condition}")
+                    return parsed_condition
+                else:
+                    logger.warning(f"Parsed JSON condition is not a list: {parsed_condition}")
+                    return [condition_string]  # Treat as a single string condition
+        except json.JSONDecodeError as e:
+            logger.warning(f"Failed to parse condition as JSON: {e}")
+        
+        # If it's not valid JSON or doesn't look like a JSON array, 
+        # treat the whole string as a single condition
+        return [condition_string]
+    
     def process_workflow(self, session_id):
         """Process workflow steps until completion or waiting for input"""
         logger = logging.getLogger(__name__)
@@ -477,7 +509,7 @@ class GraphWorkflowEngine:
                         """
                         MATCH (s:STEP {id: $step_id})-[r:NEXT]->(target:STEP)
                         RETURN target.id as target_id,
-                               r.conditions as conditions,
+                               r.condition as condition,
                                r.operator as operator
                         """,
                         step_id=step_id
@@ -486,7 +518,7 @@ class GraphWorkflowEngine:
                     # Process each outgoing path
                     for record in result:
                         target_id = record["target_id"]
-                        conditions = record.get("conditions") or []
+                        condition = record.get("condition") or []
                         operator = record.get("operator") or "AND"
                         
                         logger.info(f"Found path from {step_id} to {target_id}")
@@ -504,25 +536,72 @@ class GraphWorkflowEngine:
                             logger.warning(f"Target step {target_id} is in error state, skipping activation")
                             continue
                         
-                        # Evaluate conditions (if any)
+                        # Evaluate condition (if any)
                         should_activate = True
-                        if conditions:
+                        if condition:
                             condition_results = []
                             
+                            # Parse condition using the helper method
+                            condition = self._parse_condition_string(condition)
+                            
                             # Evaluate each condition
-                            for condition in conditions:
-                                if not isinstance(condition, str):
-                                    logger.warning(f"Invalid condition type: {type(condition)}")
-                                    continue
-                                    
-                                # Resolve variable reference
-                                try:
-                                    result = self.variable_resolver.resolve_variable(condition, state)
-                                    condition_result = bool(result)
-                                    condition_results.append(condition_result)
-                                    logger.info(f"Evaluated condition '{condition}' to {condition_result}")
-                                except Exception as e:
-                                    logger.error(f"Error evaluating condition '{condition}': {e}")
+                            for cond in condition:
+                                # Handle string condition (backward compatibility)
+                                if isinstance(cond, str):
+                                    try:
+                                        result = self.variable_resolver.resolve_variable(cond, state)
+                                        condition_result = bool(result)
+                                        condition_results.append(condition_result)
+                                        logger.info(f"Evaluated string condition '{cond}' to {condition_result}")
+                                    except Exception as e:
+                                        logger.error(f"Error evaluating string condition '{cond}': {e}")
+                                        condition_results.append(False)
+                                
+                                # Handle JSON object conditions
+                                elif isinstance(cond, dict):
+                                    try:
+                                        condition_operation_result = None
+                                        condition_operator = cond.get("operator", "AND")
+                                        
+                                        # Process "true" references (variables that should be true)
+                                        if "true" in cond:
+                                            true_var = cond["true"]
+                                            true_result = self.variable_resolver.resolve_variable(true_var, state)
+                                            true_condition = bool(true_result)
+                                            logger.info(f"Evaluated 'true' condition '{true_var}' to {true_condition}")
+                                            
+                                            if condition_operation_result is None:
+                                                condition_operation_result = true_condition
+                                            elif condition_operator == "AND":
+                                                condition_operation_result = condition_operation_result and true_condition
+                                            elif condition_operator == "OR":
+                                                condition_operation_result = condition_operation_result or true_condition
+                                        
+                                        # Process "false" references (variables that should be false)
+                                        if "false" in cond:
+                                            false_var = cond["false"]
+                                            false_result = self.variable_resolver.resolve_variable(false_var, state)
+                                            false_condition = not bool(false_result)
+                                            logger.info(f"Evaluated 'false' condition '{false_var}' to {false_condition}")
+                                            
+                                            if condition_operation_result is None:
+                                                condition_operation_result = false_condition
+                                            elif condition_operator == "AND":
+                                                condition_operation_result = condition_operation_result and false_condition
+                                            elif condition_operator == "OR":
+                                                condition_operation_result = condition_operation_result or false_condition
+                                        
+                                        if condition_operation_result is not None:
+                                            condition_results.append(condition_operation_result)
+                                            logger.info(f"Evaluated JSON condition to {condition_operation_result} with operator {condition_operator}")
+                                        else:
+                                            logger.warning(f"JSON condition had no 'true' or 'false' keys: {cond}")
+                                            condition_results.append(False)
+                                    except Exception as e:
+                                        logger.error(f"Error evaluating JSON condition: {e}")
+                                        condition_results.append(False)
+                                else:
+                                    logger.warning(f"Invalid condition type: {type(cond)}")
                                     condition_results.append(False)
                             
                             # Apply operator logic
@@ -534,7 +613,7 @@ class GraphWorkflowEngine:
                                 logger.warning(f"Unknown operator '{operator}', defaulting to AND")
                                 should_activate = all(condition_results)
                             
-                            logger.info(f"Conditions for {step_id} -> {target_id}: {condition_results} with operator {operator}, should_activate={should_activate}")
+                            logger.info(f"Condition for {step_id} -> {target_id}: {condition_results} with operator {operator}, should_activate={should_activate}")
                         
                         # If conditions pass, activate the target step
                         if should_activate:
@@ -569,7 +648,7 @@ class GraphWorkflowEngine:
                     """
                     MATCH (s:STEP {id: $id})-[r:NEXT]->(target:STEP)
                     RETURN target.id as target_id, 
-                           r.conditions as conditions,
+                           r.condition as condition,
                            r.operator as operator
                     """,
                     id=step_id
@@ -586,9 +665,13 @@ class GraphWorkflowEngine:
                 
             relationships = []
             for record in result:
+                # Get the condition and parse if it's a JSON string
+                condition = record["condition"] if "condition" in record else []
+                condition = self._parse_condition_string(condition)
+                
                 relationships.append({
                     "target_step": record["target_id"],
-                    "conditions": record["conditions"] if "conditions" in record else [],
+                    "condition": condition,
                     "operator": record["operator"] or "AND"
                 })
             return relationships
@@ -730,27 +813,27 @@ class GraphWorkflowEngine:
                     
                 logger.info(f"Evaluating relationship from {step_id} to {target_id}")
                 
-                # Evaluate conditions if present
+                # Evaluate condition if present
                 conditions_met = True
-                if rel.get("conditions") or rel.get("condition"):
+                if rel.get("condition"):
                     from .variable_resolver import resolve_variable
                     
-                    # Extract conditions based on what's available
-                    conditions = rel.get("conditions") or rel.get("condition") or []
+                    # Extract condition based on what's available
+                    condition = rel.get("condition") or []
                     
-                    # Parse conditions if it's a JSON string
-                    if isinstance(conditions, str) and (conditions.startswith('{') or conditions.startswith('[')):
+                    # Parse condition if it's a JSON string
+                    if isinstance(condition, str) and (condition.startswith('{') or condition.startswith('[')):
                         try:
-                            conditions = json.loads(conditions)
+                            condition = json.loads(condition)
                         except:
-                            logger.warning(f"Failed to parse conditions JSON: {conditions}")
-                            conditions = []
+                            logger.warning(f"Failed to parse condition JSON: {condition}")
+                            condition = []
                     
                     # Handle different condition formats
-                    if isinstance(conditions, dict):
+                    if isinstance(condition, dict):
                         # Format: {"expected_value": "variable_reference"}
                         results = []
-                        for expected_value, variable_ref in conditions.items():
+                        for expected_value, variable_ref in condition.items():
                             # Resolve the variable
                             actual_value = resolve_variable(variable_ref, state)
                             logger.info(f"CONDITION CHECK: {actual_value} == {expected_value}?")
@@ -779,10 +862,10 @@ class GraphWorkflowEngine:
                             conditions_met = any(results)
                         else:  # Default to AND
                             conditions_met = all(results)
-                    elif isinstance(conditions, list):
+                    elif isinstance(condition, list):
                         # Format: List of variable references to check for truthy values
                         results = []
-                        for variable_ref in conditions:
+                        for variable_ref in condition:
                             value = resolve_variable(variable_ref, state)
                             results.append(bool(value))
                             
@@ -794,10 +877,10 @@ class GraphWorkflowEngine:
                             conditions_met = all(results)
                     else:
                         # Single condition
-                        value = resolve_variable(conditions, state)
+                        value = resolve_variable(condition, state)
                         conditions_met = bool(value)
                 
-                logger.info(f"Conditions met for {step_id} -> {target_id}: {conditions_met}")
+                logger.info(f"Condition met for {step_id} -> {target_id}: {conditions_met}")
                 
                 if conditions_met:
                     # Use priority if available

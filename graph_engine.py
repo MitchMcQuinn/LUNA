@@ -39,6 +39,15 @@ def create_workflow():
         }
     )
     
+    # General info node uses different source for non-movie questions
+    general_info = Node(
+        id="general_info",
+        function="utils.search.find_information",
+        input={
+            "query": "@{SESSION_ID}.request.output"
+        }
+    )
+    
     # Reply node sends response back to user
     reply = Node(
         id="reply",
@@ -46,7 +55,8 @@ def create_workflow():
         input={
             "message": "@{SESSION_ID}.movie_info.overview",  # Prioritize information from the graph
             "llm_response": "@{SESSION_ID}.generate.response",  # Use LLM response as fallback
-            "movie_info": "@{SESSION_ID}.movie_info.result"  # Pass the raw Neo4j results for reference
+            "movie_info": "@{SESSION_ID}.movie_info.result",  # Pass the raw Neo4j results for reference
+            "general_info": "@{SESSION_ID}.general_info.result"  # General info for non-movie questions
         }
     )
     
@@ -55,19 +65,38 @@ def create_workflow():
         Edge(source=root, target=request),
         Edge(source=request, target=generate),
         
-        # Route to movie info if is_movie_question is true
+        # Route to movie info if is_movie_question is true (string format)
         Edge(
             source=generate,
             target=movie_info,
             conditions=["@{SESSION_ID}.generate.is_movie_question"]
         ),
         
-        # Always route to reply, but with optional movie_info attached
+        # Route to general info if is_movie_question is false (JSON format)
+        Edge(
+            source=generate,
+            target=general_info,
+            conditions=[{"false": "@{SESSION_ID}.generate.is_movie_question"}]
+        ),
+        
+        # Example of complex condition (JSON format with operator)
+        # Edge(
+        #     source=generate,
+        #     target=some_special_step,
+        #     conditions=[{
+        #         "operator": "AND", 
+        #         "true": "@{SESSION_ID}.generate.needs_special_handling",
+        #         "false": "@{SESSION_ID}.generate.is_movie_question"
+        #     }]
+        # ),
+        
+        # Always route to reply, but with optional movie_info or general_info attached
         Edge(source=generate, target=reply),
-        Edge(source=movie_info, target=reply)
+        Edge(source=movie_info, target=reply),
+        Edge(source=general_info, target=reply)
     ]
     
     return Workflow(
-        nodes=[root, request, generate, movie_info, reply],
+        nodes=[root, request, generate, movie_info, general_info, reply],
         edges=edges
     ) 
