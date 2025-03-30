@@ -117,6 +117,54 @@ def resolve_variable(var_reference, session_state):
     # Return the full output if no field specified
     return output
 
+def resolve_template_string(template, session_state):
+    """
+    Resolve a template string containing embedded variable references.
+    
+    Args:
+        template: String with embedded variables like "Text @{SESSION_ID}.step.field text"
+        session_state: Current session state object
+    
+    Returns:
+        String with all variable references replaced with their values
+    """
+    if not isinstance(template, str) or '@{SESSION_ID}' not in template:
+        return template
+    
+    logger.debug(f"Resolving template string: {template}")
+    
+    # Pattern to match variable references: @{SESSION_ID}.step_id[index].field|default
+    var_pattern = r'(@\{SESSION_ID\}(?:\.[a-zA-Z0-9_-]+)(?:\[\d+\])?(?:\.[a-zA-Z0-9_-]+)*(?:\|[^@\s]+)?)'
+    
+    # Find all variable references in the template
+    matches = re.finditer(var_pattern, template)
+    result = template
+    
+    # Process each match
+    for match in matches:
+        var_reference = match.group(0)
+        logger.debug(f"Found embedded variable: {var_reference}")
+        
+        # Resolve the variable
+        resolved_value = resolve_variable(var_reference, session_state)
+        
+        # If resolution failed and no default, return None
+        if resolved_value is None:
+            logger.warning(f"Failed to resolve embedded variable: {var_reference}")
+            if '|' not in var_reference:
+                return None
+        
+        # Convert resolved value to string for substitution
+        if resolved_value is not None:
+            if not isinstance(resolved_value, str):
+                resolved_value = str(resolved_value)
+            
+            # Replace the variable reference with the resolved value
+            result = result.replace(var_reference, resolved_value)
+    
+    logger.debug(f"Resolved template: {result}")
+    return result
+
 def resolve_inputs(input_spec, session_state):
     """
     Resolve all variables in an input specification
@@ -151,7 +199,12 @@ def resolve_inputs(input_spec, session_state):
             
             for item in value:
                 if isinstance(item, str) and '@{SESSION_ID}' in item:
-                    resolved_item = resolve_variable(item, session_state)
+                    # Check if this is a template string with embedded variables
+                    if re.search(r'[^@].*@\{SESSION_ID\}.*[^}]', item):
+                        resolved_item = resolve_template_string(item, session_state)
+                    else:
+                        resolved_item = resolve_variable(item, session_state)
+                    
                     if resolved_item is None:
                         list_failed = True
                         break
@@ -167,7 +220,13 @@ def resolve_inputs(input_spec, session_state):
         
         # Handle string variable references
         if isinstance(value, str) and '@{SESSION_ID}' in value:
-            resolved_value = resolve_variable(value, session_state)
+            # Check if this is a template string with embedded variables
+            if re.search(r'[^@].*@\{SESSION_ID\}.*[^}]', value) or re.search(r'@\{SESSION_ID\}.*[^}].*@\{SESSION_ID\}', value):
+                # Handle as template string with embedded variables
+                resolved_value = resolve_template_string(value, session_state)
+            else:
+                # Handle as direct variable reference
+                resolved_value = resolve_variable(value, session_state)
             
             if resolved_value is None:
                 # For better debugging

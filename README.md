@@ -12,11 +12,13 @@
    - Comprehensive tracking of step execution status
    - Clean separation between execution state and data
    - Timestamp-based tracking of step evaluation
+   - Error handling with detailed error messages stored per step
 
 3. **Versioned Variable Resolution System**
    - Dynamic variable references between steps
    - Format: `@{SESSION_ID}.step_id[index].field|default`
    - Optional indexing of multiple step executions
+   - Maintains a rolling window of the last 5 outputs per step
    - Allows flexible data passing between steps and iterations
 
 4. **User Interaction Support**
@@ -51,7 +53,7 @@ The `state` JSON contains the following structure:
   "last_evaluated": 1234567890,  // Timestamp of last path evaluation
   "data": {
     "outputs": {                 // Results from each step
-      "step_id": [],             // Array of outputs, most recent last
+      "step_id": [],             // Array of outputs, most recent last (max 5)
     },
     "messages": []               // Optional chat history
   }
@@ -123,6 +125,8 @@ The engine processes steps in the following order:
        - Record execution timestamp
      - If function missing:
        - Mark step as 'error'
+       - Store detailed error message in state
+       - Allow error inspection in UI
 
 3. **Path Progression**
    - Find steps completed since last path evaluation
@@ -155,3 +159,11 @@ When a step requests user input:
 3. Input is processed and stored in step's output array
 4. Step is marked as complete with current timestamp
 5. Workflow resumes processing 
+
+### Error Handling
+When errors occur during step execution:
+1. Error details are captured and stored in the step's state
+2. Step is marked with 'error' status
+3. Error messages are made available to the UI
+4. Workflow may continue with other branches if possible
+5. Error information can be used for debugging or recovery 
