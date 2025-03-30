@@ -166,10 +166,45 @@ def send_message(session_id):
         logger.info(f"Status after handling input: {status}")
         
         # Continue processing the workflow until completion or awaiting input
-        # This is required because handle_user_input now returns "active" to signal processing should continue
         if status == "active":
             logger.info(f"Processing workflow after user input")
             processing_start = time.time()
+            
+            # Add debugging for path evaluation
+            logger.info("===== PATH EVALUATION DEBUG =====")
+            try:
+                with get_graph_workflow_engine().session_manager.driver.get_session() as debug_session:
+                    # Check paths from generate step
+                    result = debug_session.run("""
+                        MATCH (s:STEP {id: 'generate'})-[r:NEXT]->(t:STEP {id: 'reply'})
+                        RETURN r.condition as condition, r.conditions as conditions, r.operator as operator
+                    """)
+                    record = result.single()
+                    if record:
+                        conditions = record.get("conditions") or record.get("condition") or "None"
+                        operator = record.get("operator") or "default"
+                        logger.info(f"Path from generate to reply exists with:")
+                        logger.info(f"  Conditions: {conditions}")
+                        logger.info(f"  Operator: {operator}")
+                        
+                        # Try to parse conditions
+                        try:
+                            if isinstance(conditions, str) and (conditions.startswith('[') or conditions.startswith('{')):
+                                parsed_conditions = json.loads(conditions)
+                                logger.info(f"  Parsed conditions: {json.dumps(parsed_conditions)}")
+                        except Exception as e:
+                            logger.error(f"  Error parsing conditions: {e}")
+                    else:
+                        logger.warning("No direct path from generate to reply found")
+                    
+                    # Check state of workflow steps
+                    state = get_session_manager().get_session_state(session_id)
+                    logger.info(f"Current workflow step statuses:")
+                    for step_id, info in state["workflow"].items():
+                        logger.info(f"  {step_id}: {info['status']}")
+            except Exception as e:
+                logger.error(f"Error during path evaluation debug: {e}")
+            logger.info("================================")
             
             # Process with timeout protection
             max_iterations = 20
@@ -197,10 +232,19 @@ def send_message(session_id):
         if "messages" not in state["data"]:
             state["data"]["messages"] = []
         
-        # Ensure user message is in the messages list
+        # Ensure user message is in the messages list - with deduplication
         user_message = {"role": "user", "content": message}
-        if not any(m.get("role") == "user" and m.get("content") == message for m in state["data"]["messages"]):
+        
+        # Check if this exact user message already exists
+        user_msg_exists = False
+        for existing_msg in state["data"]["messages"]:
+            if existing_msg.get("role") == "user" and existing_msg.get("content") == message:
+                user_msg_exists = True
+                break
+                
+        if not user_msg_exists:
             state["data"]["messages"].append(user_message)
+            logger.info(f"Added user message to conversation history: {message[:50]}")
         
         # Get response based on the updated state
         assistant_response = None
@@ -258,6 +302,43 @@ def send_message(session_id):
                 reply_steps.sort(key=lambda x: x[1], reverse=True)
                 logger.info(f"Found {len(reply_steps)} reply steps, sorted by timestamp: {reply_steps}")
                 
+                # Add specific debug for reply step analysis
+                logger.info("===== REPLY STEP DEBUG INFO =====")
+                for step_id in state["workflow"]:
+                    if step_id == "reply" or "reply" in step_id.lower():
+                        logger.info(f"Found reply step: {step_id}")
+                        logger.info(f"  Status: {state['workflow'][step_id]['status']}")
+                        logger.info(f"  Last executed: {state['workflow'][step_id].get('last_executed', 'never')}")
+                        if step_id in state["data"]["outputs"]:
+                            logger.info(f"  Has output: Yes")
+                            try:
+                                outputs = state["data"]["outputs"][step_id]
+                                if isinstance(outputs, list):
+                                    logger.info(f"  Outputs count: {len(outputs)}")
+                                    if outputs:
+                                        logger.info(f"  Latest output: {json.dumps(outputs[-1], default=str)[:200]}")
+                                else:
+                                    logger.info(f"  Output: {json.dumps(outputs, default=str)[:200]}")
+                            except Exception as e:
+                                logger.error(f"  Error getting reply outputs: {e}")
+                        else:
+                            logger.info(f"  Has output: No")
+                
+                # Also check generate step for merits_followup value
+                for step_id in state["workflow"]:
+                    if step_id == "generate" or "generate" in step_id.lower():
+                        logger.info(f"Found generate step: {step_id}")
+                        logger.info(f"  Status: {state['workflow'][step_id]['status']}")
+                        if step_id in state["data"]["outputs"]:
+                            try:
+                                outputs = state["data"]["outputs"][step_id]
+                                if isinstance(outputs, list) and outputs:
+                                    latest = outputs[-1]
+                                    logger.info(f"  merits_followup: {latest.get('merits_followup', 'NOT FOUND')}")
+                            except Exception as e:
+                                logger.error(f"  Error checking merits_followup: {e}")
+                logger.info("==================================")
+                
                 # Process reply functions in order of recency
                 for step_id, timestamp in reply_steps:
                     outputs = state["data"]["outputs"][step_id]
@@ -309,24 +390,44 @@ def send_message(session_id):
                 "content": "I'm sorry, I couldn't generate a response. Please try again."
             }
         
-        # Add the response to messages if it's not already there
-        if not any(m.get("role") == "assistant" and m.get("content") == assistant_response["content"] 
-                 for m in state["data"]["messages"]):
+        # Add the response to messages, with proper deduplication
+        assistant_content = assistant_response["content"]
+        
+        # Check if this EXACT response already exists (avoid same response being added multiple times)
+        assistant_msg_exists = False
+        for idx, existing_msg in enumerate(state["data"]["messages"]):
+            if existing_msg.get("role") == "assistant" and existing_msg.get("content") == assistant_content:
+                assistant_msg_exists = True
+                # If it's not the last message, move it to the end to maintain conversation flow
+                if idx < len(state["data"]["messages"]) - 1:
+                    state["data"]["messages"].append(existing_msg)
+                    state["data"]["messages"].pop(idx)
+                break
+                
+        if not assistant_msg_exists:
+            # Add message with unique ID for tracking
+            assistant_response["_message_id"] = str(uuid.uuid4())[:8]
+            assistant_response["timestamp"] = time.time()
             state["data"]["messages"].append(assistant_response)
+            logger.info(f"Added new assistant response: {assistant_content[:50]}...")
             
-            # Update the state with the new message
+            # Update the state with the new message atomically
             def update_messages(current_state):
-                if "messages" not in current_state["data"]:
-                    current_state["data"]["messages"] = []
-                # Ensure message isn't duplicated
-                if not any(m.get("role") == assistant_response["role"] and m.get("content") == assistant_response["content"]
-                         for m in current_state["data"]["messages"]):
-                    current_state["data"]["messages"].append(assistant_response)
+                # Find if this exact message exists
+                for existing_msg in current_state["data"]["messages"]:
+                    if existing_msg.get("role") == "assistant" and existing_msg.get("content") == assistant_content:
+                        logger.info(f"Skipping duplicate assistant message during update")
+                        return current_state
+                
+                # Add if not found
+                current_state["data"]["messages"].append(assistant_response.copy())
                 return current_state
             
             session_manager.update_session_state(session_id, update_messages)
         
+        # ===== PROMPT MESSAGE HANDLING =====
         # Check if we're awaiting input and add the prompt as a message
+        # This is the main source of duplicates, needs careful handling
         awaiting_input = None
         if status == "awaiting_input":
             # Find the step that's awaiting input
@@ -341,26 +442,23 @@ def send_message(session_id):
                         else:
                             awaiting_input = outputs
                             
-                        # Add the prompt as a message if it exists
+                        # Add the prompt as a message if it exists and is not already there
                         if awaiting_input and isinstance(awaiting_input, dict):
                             prompt_fields = ["prompt", "query", "message", "content", "text"]
                             for field in prompt_fields:
                                 if field in awaiting_input and awaiting_input[field]:
                                     prompt_content = awaiting_input[field]
                                     
-                                    # Check if this prompt is already in the messages
+                                    # Check if this EXACT prompt content already exists in messages
                                     prompt_exists = False
-                                    logger.info(f"PROMPT_CHECK: Looking for existing prompt: '{prompt_content[:50]}...'")
-                                    
-                                    # Check all messages, not just the most recent ones
-                                    for i, msg in enumerate(state["data"]["messages"]):
-                                        if msg.get("role") == "assistant" and msg.get("content") == prompt_content:
+                                    for existing_msg in state["data"]["messages"]:
+                                        if existing_msg.get("role") == "assistant" and existing_msg.get("content") == prompt_content:
+                                            logger.info(f"PROMPT_SKIP: Skipping duplicate prompt: '{prompt_content[:50]}...'")
                                             prompt_exists = True
-                                            logger.info(f"PROMPT_CHECK: Found existing prompt at index {i}")
                                             break
                                     
                                     if not prompt_exists:
-                                        # Create a new prompt message
+                                        # Create a new prompt message with unique ID
                                         prompt_message = {
                                             "role": "assistant", 
                                             "content": prompt_content,
@@ -370,22 +468,19 @@ def send_message(session_id):
                                         
                                         # Add the prompt to messages
                                         state["data"]["messages"].append(prompt_message)
-                                        logger.info(f"PROMPT_ADD: Added new prompt message (ID: {prompt_message['_prompt_id']}): '{prompt_content[:50]}...'")
+                                        logger.info(f"PROMPT_ADD: Added unique prompt message: '{prompt_content[:50]}...'")
                                         
-                                        # Update state with prompt message
+                                        # Update state with prompt message atomically
                                         def update_with_prompt(current_state):
-                                            # Check for duplicates before adding
-                                            exists = False
-                                            logger.info(f"PROMPT_UPDATE: Checking for duplicate in session state update")
-                                            for msg in current_state["data"]["messages"]:
-                                                if msg.get("role") == "assistant" and msg.get("content") == prompt_content:
-                                                    exists = True
-                                                    logger.info(f"PROMPT_UPDATE: Found duplicate in session update")
-                                                    break
-                                                    
-                                            if not exists:
-                                                current_state["data"]["messages"].append(prompt_message.copy())
-                                                logger.info(f"PROMPT_UPDATE: Added prompt in session update (ID: {prompt_message['_prompt_id']})")
+                                            # Check again if this exact prompt exists
+                                            for existing_msg in current_state["data"]["messages"]:
+                                                if existing_msg.get("role") == "assistant" and existing_msg.get("content") == prompt_content:
+                                                    logger.info(f"PROMPT_SKIP_UPDATE: Prompt was added by another process")
+                                                    return current_state
+                                            
+                                            # Add if still not found
+                                            current_state["data"]["messages"].append(prompt_message.copy())
+                                            logger.info(f"PROMPT_UPDATE: Added prompt in session update")
                                             return current_state
                                         
                                         session_manager.update_session_state(session_id, update_with_prompt)
@@ -421,7 +516,6 @@ def get_session(session_id):
         
         # Check if the workflow is waiting for input
         awaiting_input = None
-        prompt_added_in_get = False  # Track if we add a prompt in this GET request
         
         if status == "awaiting_input":
             # Find the step that's awaiting input
@@ -437,11 +531,9 @@ def get_session(session_id):
                             # Backward compatibility for non-array outputs
                             awaiting_input = outputs
                         
-                        # Since the POST /message endpoint already adds prompts,
-                        # we'll avoid adding them again in GET to prevent duplicates.
-                        # Just include awaiting_input data in the response
-                        prompt_added_in_get = True
-                        logger.info(f"GET: Found awaiting_input state but not adding prompt to avoid duplicates")
+                        # DO NOT add prompt to messages here - only return it in awaiting_input
+                        # This prevents duplicate prompts since the POST endpoint already handles it
+                        logger.info(f"GET: Found awaiting_input but not adding prompt to avoid duplicates")
                         break
                  
         return jsonify({

@@ -28,11 +28,12 @@ def generate(model="gpt-4o-mini", temperature=0.7, system=None, user=None, inclu
     """
     # Check that we have required inputs
     if user is None:
-        logger.error("Missing required user input for generation")
-        return {
+        error_response = {
             "error": "Missing required user input",
             "message": "I'm sorry, I couldn't process that request: Missing user input"
         }
+        logger.error(f"Generation failed: {error_response}")
+        return error_response
     
     try:
         import openai
@@ -141,14 +142,29 @@ def generate(model="gpt-4o-mini", temperature=0.7, system=None, user=None, inclu
                         if missing_fields:
                             logger.warning(f"Model response missing required fields: {missing_fields}. Added defaults.")
                     
+                    # Remove the special handling that references specific variable names
+                    
                     logger.info(f"Function response fields: {list(function_args.keys())}")
+                    
+                    # Specifically log merits_followup value for debugging
+                    if "merits_followup" in function_args:
+                        logger.info(f"merits_followup value: {function_args['merits_followup']} (type: {type(function_args['merits_followup']).__name__})")
+                    else:
+                        logger.warning("merits_followup field is MISSING from response")
+                    
+                    # Log full response for debugging
+                    logger.info(f"Full function response: {json.dumps(function_args, default=str)[:500]}")
+                    
+                    # Log the complete output
+                    logger.info(f"GENERATION OUTPUT: {json.dumps(function_args, default=str)}")
                     return function_args
                 except Exception as e:
-                    logger.error(f"Error parsing function call arguments: {e}")
-                    return {
+                    error_response = {
                         "error": f"Failed to parse function response: {e}",
                         "message": "I'm sorry, there was an error processing the response."
                     }
+                    logger.error(f"Generation failed: {error_response}")
+                    return error_response
             else:
                 # Direct text response
                 text = completion.content
@@ -156,11 +172,13 @@ def generate(model="gpt-4o-mini", temperature=0.7, system=None, user=None, inclu
                 
                 # If directly setting reply, wrap in the expected format
                 if directly_set_reply:
-                    return {
+                    result = {
                         "response": text,
                         "message": text,
                         "content": text
                     }
+                    logger.info(f"GENERATION OUTPUT: {json.dumps(result, default=str)}")
+                    return result
                 
                 # If schema exists, create structured response following schema requirements
                 if schema and "properties" in schema:
@@ -196,24 +214,39 @@ def generate(model="gpt-4o-mini", temperature=0.7, system=None, user=None, inclu
                                     structured_response[field] = None
                     
                     logger.info(f"Created structured response with fields: {list(structured_response.keys())}")
+                    
+                    # Add detailed logging for merits_followup in structured responses
+                    if "merits_followup" in structured_response:
+                        logger.info(f"merits_followup value: {structured_response['merits_followup']} (type: {type(structured_response['merits_followup']).__name__})")
+                    else:
+                        logger.warning("merits_followup field is MISSING from structured response")
+                    
+                    # Log full response for debugging
+                    logger.info(f"Full structured response: {json.dumps(structured_response, default=str)[:500]}")
+                    
+                    # Log the complete output
+                    logger.info(f"GENERATION OUTPUT: {json.dumps(structured_response, default=str)}")
                     return structured_response
                 
                 # No schema provided, return text as-is
+                logger.info(f"GENERATION OUTPUT: {text}")
                 return text
                 
         except Exception as e:
-            logger.error(f"OpenAI generation error: {e}")
-            return {
+            error_response = {
                 "error": f"Text generation failed: {e}",
                 "message": f"I'm sorry, I couldn't process that request: Text generation failed: {e}"
             }
+            logger.error(f"Generation failed: {error_response}")
+            return error_response
             
     except ImportError:
-        logger.error("OpenAI package not installed")
-        return {
+        error_response = {
             "error": "OpenAI package not installed",
             "message": "I'm sorry, I couldn't process that request: OpenAI package not installed"
         }
+        logger.error(f"Generation failed: {error_response}")
+        return error_response
 
 def classify(text, categories, model="gpt-3.5-turbo", **kwargs):
     """
