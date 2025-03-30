@@ -129,8 +129,8 @@
     <script>
         // Store the current session ID
         let currentSessionId = null;
-        // Keep track of displayed message IDs instead of content
-        let displayedMessageIds = new Set();
+        // Track message history rather than deduping
+        let messageHistory = [];
 
         // Function to create a new session
         async function createSession() {
@@ -150,11 +150,11 @@
                 
                 // Clear existing messages and reset tracking
                 document.getElementById('chatMessages').innerHTML = '';
-                displayedMessageIds = new Set();
+                messageHistory = [];
                 
                 // Update the UI with any messages
                 if (data.messages && data.messages.length > 0) {
-                    // Sort by timestamp if available to ensure correct order
+                    // Sort by timestamp if available
                     const messages = [...data.messages].sort((a, b) => {
                         const timeA = a.timestamp || 0;
                         const timeB = b.timestamp || 0;
@@ -192,7 +192,7 @@
                 const userMessage = {
                     role: 'user',
                     content: message,
-                    _client_id: 'user-' + Date.now(), // Generate a client-side ID
+                    _client_id: 'user-' + Date.now(), // Generate a client-side ID for reference
                     timestamp: Date.now() / 1000  // Add timestamp for ordering
                 };
                 addMessageToUI(userMessage);
@@ -222,9 +222,6 @@
                 document.getElementById('messageInput').disabled = false;
                 document.getElementById('sendButton').disabled = false;
                 
-                // Wait briefly before updating to ensure server has fully processed
-                await new Promise(resolve => setTimeout(resolve, 500));
-                
                 // Get all messages, sort by timestamp
                 if (data.messages && data.messages.length > 0) {
                     // Sort by timestamp if available
@@ -234,25 +231,11 @@
                         return timeA - timeB;
                     });
                     
-                    // Find the index of the user message we just sent
-                    const userMessageIndex = sortedMessages.findIndex(m => 
-                        m.role === 'user' && m.content === message);
-                    
-                    if (userMessageIndex !== -1) {
-                        // Get messages that follow this user message 
-                        const newMessages = sortedMessages.slice(userMessageIndex + 1);
-                        
-                        // Only add messages not already displayed
-                        newMessages.forEach(message => {
-                            addMessageToUI(message);
-                        });
-                    } else {
-                        // If user message not found in response, make sure to render all new assistant messages
-                        const assistantMessages = sortedMessages.filter(m => m.role === 'assistant');
-                        assistantMessages.forEach(message => {
-                            addMessageToUI(message);
-                        });
-                    }
+                    // Clear existing messages and display all messages from server
+                    document.getElementById('chatMessages').innerHTML = '';
+                    sortedMessages.forEach(message => {
+                        addMessageToUI(message);
+                    });
                 }
                 
                 // Check if waiting for input
@@ -277,36 +260,14 @@
             }
         }
 
-        // Function to add a message to the chat with improved deduplication
+        // Function to add a message to the chat (no deduplication)
         function addMessageToUI(message) {
-            // Generate a message ID using available unique identifiers
+            // Generate a message ID for tracking only
             const messageId = message._prompt_id || message._message_id || message._client_id || 
                             `${message.role}-${message.content}-${message.timestamp || Date.now()}`;
             
-            // Skip if we've already displayed this specific message instance
-            if (displayedMessageIds.has(messageId)) {
-                console.log(`Skipping already displayed message ID: ${messageId}`);
-                return;
-            }
-            
-            // An additional check for content-based duplicates within a small time window
-            // Helps with cases where the same content appears in rapid succession
-            // Only do this for assistant messages to avoid suppressing user messages
-            if (message.role === 'assistant') {
-                // Check each displayed message 
-                const existingElements = document.querySelectorAll('.message.assistant');
-                for (const element of existingElements) {
-                    // If content is identical and it was added in last 5 seconds, skip
-                    if (element.textContent === message.content) {
-                        console.log(`Skipping duplicate assistant message content: ${message.content.substring(0, 30)}...`);
-                        displayedMessageIds.add(messageId); // Mark as displayed
-                        return;
-                    }
-                }
-            }
-            
-            // Add this message ID to our tracking set
-            displayedMessageIds.add(messageId);
+            // Add this message to our history
+            messageHistory.push(message);
             
             // Create and display the message
             const messagesContainer = document.getElementById('chatMessages');
@@ -364,11 +325,11 @@
             
             // Show the prompt message if available
             if (inputData.prompt) {
-                // Create a message object with the prompt and a unique ID
+                // Create a message object with the prompt
                 const promptMessage = {
                     role: 'assistant',
                     content: inputData.prompt,
-                    _client_id: 'prompt-' + Date.now(), // Ensure unique ID for prompt
+                    _client_id: 'prompt-' + Date.now(), // For tracking only
                     timestamp: Date.now() / 1000  // Add timestamp for ordering
                 };
                 addMessageToUI(promptMessage);

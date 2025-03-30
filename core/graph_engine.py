@@ -284,6 +284,20 @@ class GraphWorkflowEngine:
             from .variable_resolver import resolve_inputs
             input_data = resolve_inputs(input_data, state) or {}
             
+            # Check previous user responses to help debug path issues
+            if "data" in state and "outputs" in state["data"]:
+                # Look for request steps with responses
+                for prev_step_id, outputs in state["data"]["outputs"].items():
+                    if "request" in prev_step_id:
+                        if isinstance(outputs, list) and outputs:
+                            last_output = outputs[-1]
+                            if isinstance(last_output, dict) and "response" in last_output:
+                                logger.info(f"DEBUG: Found previous request response in {prev_step_id}: {last_output.get('response')}")
+                                
+                                # Check if this is a negative response
+                                if isinstance(last_output.get("response"), str) and last_output.get("response").lower().strip() in ["no", "nope", "no way", "no thanks", "not interested"]:
+                                    logger.info(f"DEBUG: Previous response was NEGATIVE - this might affect path conditions")
+            
             # Store the resolved input as step output
             def set_awaiting_input(current_state):
                 # Initialize data structure if needed
@@ -531,9 +545,61 @@ class GraphWorkflowEngine:
         
         logger.info(f"DEBUG: Found {len(recently_completed_steps)} completed steps to evaluate: {recently_completed_steps}")
         
+        # Check for special information in the current state
+        # Look for specific values that might affect path decisions
+        logger.info("===== DEBUG: CRITICAL PATH VALUES =====")
+        try:
+            # Look for request steps with responses - especially "no" responses
+            request_responses = []
+            for step_id, outputs in state.get("data", {}).get("outputs", {}).items():
+                if "request" in step_id:
+                    if isinstance(outputs, list) and outputs:
+                        last_output = outputs[-1]
+                        if isinstance(last_output, dict) and "response" in last_output:
+                            request_responses.append((step_id, last_output.get("response")))
+            if request_responses:
+                logger.info(f"Found request responses: {request_responses}")
+            
+            # Look for merits_followup values
+            generate_steps = []
+            for step_id, outputs in state.get("data", {}).get("outputs", {}).items():
+                if "generate" in step_id:
+                    if isinstance(outputs, list) and outputs:
+                        last_output = outputs[-1]
+                        if isinstance(last_output, dict) and "merits_followup" in last_output:
+                            generate_steps.append((step_id, last_output.get("merits_followup")))
+            if generate_steps:
+                logger.info(f"Found generate steps with merits_followup values: {generate_steps}")
+                
+            # Check for path conflicts
+            # If we have a "no" in request but merits_followup is true, that could explain issues
+            has_no_response = any(resp and isinstance(resp, str) and resp.lower().strip() in ["no", "nope", "no way"] 
+                                for _, resp in request_responses)
+            has_true_followup = any(followup for _, followup in generate_steps)
+            
+            if has_no_response and has_true_followup:
+                logger.warning("CONFLICT DETECTED: 'No' response from user but merits_followup is True")
+                logger.warning("This may explain why mutually exclusive paths are not being followed correctly")
+                
+        except Exception as e:
+            logger.error(f"Error checking for critical path values: {e}")
+        logger.info("=======================================")
+        
         # Find all outgoing paths from recently completed steps
         with self.session_manager.driver.get_session() as session:
             for step_id in recently_completed_steps:
+                # Check relevant step outputs for debugging
+                if step_id in state.get("data", {}).get("outputs", {}):
+                    step_outputs = state["data"]["outputs"][step_id]
+                    if isinstance(step_outputs, list) and step_outputs:
+                        latest_output = step_outputs[-1]
+                        logger.info(f"DEBUG: Latest output from step {step_id}: {json.dumps(latest_output, default=str)[:200]}")
+                        # Look for key fields that might be used in conditions
+                        if isinstance(latest_output, dict):
+                            for key in ['merits_followup', 'response', 'is_movie_question']:
+                                if key in latest_output:
+                                    logger.info(f"DEBUG: Key field in {step_id}: {key}={latest_output[key]}")
+                
                 # Use a simpler query that doesn't rely on optional properties
                 try:
                     # Query outgoing paths with more resilient approach
@@ -554,6 +620,7 @@ class GraphWorkflowEngine:
                         operator = record.get("operator") or "AND"
                         
                         logger.info(f"Found path from {step_id} to {target_id}")
+                        logger.info(f"DEBUG: Path condition: {condition}")
                         
                         # Skip if target step is already active or awaiting input
                         # BUT allow reactivation of completed steps for loop support
@@ -575,6 +642,7 @@ class GraphWorkflowEngine:
                             
                             # Parse condition using the helper method
                             condition = self._parse_condition_string(condition)
+                            logger.info(f"DEBUG: Parsed condition: {condition}")
                             
                             # Evaluate each condition
                             for cond in condition:
@@ -590,7 +658,7 @@ class GraphWorkflowEngine:
                                         result = self.variable_resolver.resolve_variable(cond, state)
                                         condition_result = bool(result)
                                         condition_results.append(condition_result)
-                                        logger.info(f"Evaluated string condition '{cond}' to {condition_result}")
+                                        logger.info(f"Evaluated string condition '{cond}' to {condition_result}, raw value: {result}")
                                     except Exception as e:
                                         logger.error(f"Error evaluating string condition '{cond}': {e}")
                                         condition_results.append(False)
@@ -612,7 +680,7 @@ class GraphWorkflowEngine:
                                             
                                             true_result = self.variable_resolver.resolve_variable(true_var, state)
                                             true_condition = bool(true_result)
-                                            logger.info(f"Evaluated 'true' condition '{true_var}' to {true_condition}")
+                                            logger.info(f"Evaluated 'true' condition '{true_var}' to {true_condition}, raw value: {true_result}")
                                             
                                             if condition_operation_result is None:
                                                 condition_operation_result = true_condition
@@ -632,7 +700,7 @@ class GraphWorkflowEngine:
                                             
                                             false_result = self.variable_resolver.resolve_variable(false_var, state)
                                             false_condition = not bool(false_result)
-                                            logger.info(f"Evaluated 'false' condition '{false_var}' to {false_condition}")
+                                            logger.info(f"Evaluated 'false' condition '{false_var}' to {false_condition}, raw value: {false_result}")
                                             
                                             if condition_operation_result is None:
                                                 condition_operation_result = false_condition
@@ -675,15 +743,21 @@ class GraphWorkflowEngine:
         # Now apply all activations in a single atomic update
         if steps_to_activate:
             def activate_multiple_steps(current_state):
+                logger.info(f"DEBUG: Step status before activation {[f'{s}: {current_state['workflow'].get(s, {}).get('status', 'unknown')}' for s in steps_to_activate]}")
+                
                 for target_id in steps_to_activate:
                     if target_id not in current_state["workflow"]:
                         current_state["workflow"][target_id] = {}
-                    current_state["workflow"][target_id]["status"] = "active"
-                    current_state["workflow"][target_id]["error"] = ""
+                    
+                    # Only activate if not already active/awaiting_input (additional safety check)
+                    if current_state["workflow"][target_id].get("status") not in ["active", "awaiting_input"]:
+                        current_state["workflow"][target_id]["status"] = "active"
+                        current_state["workflow"][target_id]["error"] = ""
                 
                 # Update the last_evaluated timestamp
                 current_state["last_evaluated"] = current_time
-                logger.info(f"DEBUG: Step status before activation {[f'{s}: {current_state['workflow'].get(s, {}).get('status', 'unknown')}' for s in steps_to_activate]}")
+                
+                logger.info(f"DEBUG: Step status after activation {[f'{s}: {current_state['workflow'].get(s, {}).get('status', 'unknown')}' for s in steps_to_activate]}")
                 return current_state
                 
             self.session_manager.update_session_state(session_id, activate_multiple_steps)
@@ -696,6 +770,10 @@ class GraphWorkflowEngine:
             
             self.session_manager.update_session_state(session_id, update_timestamp)
             logger.info(f"Updated last_evaluated timestamp to {current_time}")
+            
+        # Get updated state and check status for critical debugging
+        updated_state = self.session_manager.get_session_state(session_id)
+        logger.info(f"DEBUG: Final workflow status after path evaluation: {[(s, updated_state['workflow'][s]['status']) for s in updated_state['workflow']]}")
     
     def _get_outgoing_relationships(self, step_id):
         """Get outgoing NEXT relationships from a step"""

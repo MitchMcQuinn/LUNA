@@ -6,34 +6,33 @@ import logging
 
 logger = logging.getLogger(__name__)
 
-def reply(message=None, content=None, llm_response=None, movie_info=None, end_session=False, **kwargs):
+def reply(message=None, content=None, llm_response=None, end_session=False, **kwargs):
     """
     Send a message to the user.
     
     Args:
-        message: Message text to send (from graph overview if available)
+        message: Primary message text to send
         content: Alternative message content (lower priority than message)
-        llm_response: Response from the LLM (used if no graph data)
-        movie_info: Raw graph data results
+        llm_response: Response from the LLM (used if no direct message provided)
         end_session: Whether to end the session after this message
         **kwargs: Additional parameters to include in the result
         
     Returns:
         Result containing the message
     """
-    # Determine priority of information sources
-    if message and movie_info:
-        # We have graph data and a formatted overview - use it
+    # Determine which text to use in priority order
+    if message:
+        # Use primary message if available
         text = message
-        logger.info("Using graph database information for response")
+        logger.info("Using primary message for response")
     elif llm_response:
         # Use LLM response as fallback
         text = llm_response
         logger.info("Using LLM response as fallback")
     else:
-        # Use message or content as final fallback
-        text = message or content
-        logger.info("Using provided message/content text")
+        # Use content as final fallback
+        text = content
+        logger.info("Using content text")
     
     if not text:
         logger.warning("No message content provided to reply")
