@@ -76,25 +76,25 @@ def inspect_workflow_relationships():
         result = session.run("""
             MATCH (source:STEP)-[r:NEXT]->(target:STEP)
             RETURN source.id as source, target.id as target,
-                   r.conditions as conditions, r.priority as priority
+                   r.condition as condition, r.priority as priority
             ORDER BY source.id, priority
         """)
         
         for record in result:
             source = record["source"]
             target = record["target"]
-            conditions = record["conditions"]
+            condition = record["condition"]
             priority = record["priority"] or "default"
             
             print(f"\n{source} -> {target}")
             print(f"  Priority: {priority}")
-            print(f"  Conditions: {conditions}")
+            print(f"  Condition: {condition}")
             
-            # Try to parse conditions JSON
-            if conditions and isinstance(conditions, str):
+            # Try to parse condition JSON
+            if condition and isinstance(condition, str):
                 try:
-                    conditions_data = json.loads(conditions)
-                    print(f"  Parsed Conditions: {json.dumps(conditions_data, indent=2)}")
+                    condition_data = json.loads(condition)
+                    print(f"  Parsed Condition: {json.dumps(condition_data, indent=2)}")
                 except:
                     pass
 

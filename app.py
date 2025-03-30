@@ -246,29 +246,40 @@ def send_message(session_id):
 
             # Check in the standard places for a response
             if "data" in state and "outputs" in state["data"]:
-                # Try to find steps with reply functions first
+                # Find all steps with reply functions and sort by last_executed timestamp
+                reply_steps = []
                 for step_id, function_name in step_functions.items():
                     if function_name and "reply" in function_name.lower() and step_id in state["data"]["outputs"]:
-                        outputs = state["data"]["outputs"][step_id]
+                        # Get the timestamp when this step was last executed
+                        last_executed = state["workflow"].get(step_id, {}).get("last_executed", 0)
+                        reply_steps.append((step_id, last_executed))
+                
+                # Sort reply steps by timestamp (most recent first)
+                reply_steps.sort(key=lambda x: x[1], reverse=True)
+                logger.info(f"Found {len(reply_steps)} reply steps, sorted by timestamp: {reply_steps}")
+                
+                # Process reply functions in order of recency
+                for step_id, timestamp in reply_steps:
+                    outputs = state["data"]["outputs"][step_id]
+                    
+                    # Handle array-based outputs (get most recent)
+                    if isinstance(outputs, list) and outputs:
+                        output = outputs[-1]  # Get the most recent output
+                    else:
+                        # Backward compatibility for non-array outputs
+                        output = outputs
                         
-                        # Handle array-based outputs (get most recent)
-                        if isinstance(outputs, list) and outputs:
-                            output = outputs[-1]  # Get the most recent output
-                        else:
-                            # Backward compatibility for non-array outputs
-                            output = outputs
-                            
-                        if isinstance(output, dict):
-                            for field in ["message", "content", "response"]:
-                                if field in output and output[field]:
-                                    assistant_response = {
-                                        "role": "assistant",
-                                        "content": output[field]
-                                    }
-                                    logger.info(f"Found response in {step_id}.{field} (reply function)")
-                                    break
-                            if assistant_response:
+                    if isinstance(output, dict):
+                        for field in ["message", "content", "response"]:
+                            if field in output and output[field]:
+                                assistant_response = {
+                                    "role": "assistant",
+                                    "content": output[field]
+                                }
+                                logger.info(f"Found response in {step_id}.{field} (reply function, executed at {timestamp})")
                                 break
+                        if assistant_response:
+                            break
                 
                 # If no reply function found, check for generate functions
                 if not assistant_response:
