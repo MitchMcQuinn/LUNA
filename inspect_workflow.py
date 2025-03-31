@@ -73,30 +73,182 @@ def inspect_workflow_relationships():
     
     with session_manager.driver.get_session() as session:
         print("\n=== WORKFLOW RELATIONSHIPS ===")
+        # Modified to get all relationship properties
         result = session.run("""
             MATCH (source:STEP)-[r:NEXT]->(target:STEP)
-            RETURN source.id as source, target.id as target,
-                   r.condition as condition, r.priority as priority
-            ORDER BY source.id, priority
+            RETURN source.id as source, target.id as target, properties(r) as properties
+            ORDER BY source.id
         """)
         
         for record in result:
             source = record["source"]
             target = record["target"]
-            condition = record["condition"]
-            priority = record["priority"] or "default"
+            props = record["properties"]
             
             print(f"\n{source} -> {target}")
-            print(f"  Priority: {priority}")
-            print(f"  Condition: {condition}")
+            print(f"  All Properties:")
             
-            # Try to parse condition JSON
-            if condition and isinstance(condition, str):
-                try:
-                    condition_data = json.loads(condition)
-                    print(f"  Parsed Condition: {json.dumps(condition_data, indent=2)}")
-                except:
-                    pass
+            # Display all properties of the relationship
+            for key, value in props.items():
+                print(f"    {key}: {value}")
+                
+                # Try to parse JSON for any string property
+                if value and isinstance(value, str):
+                    try:
+                        json_data = json.loads(value)
+                        print(f"    Parsed {key}: {json.dumps(json_data, indent=6)}")
+                    except json.JSONDecodeError:
+                        pass  # Not valid JSON, that's fine
+
+def visualize_workflow_hierarchy():
+    """
+    Visualize the hierarchical workflow structure starting from the root node.
+    This function shows a tree-like representation of the workflow, including branches and loops.
+    """
+    session_manager = get_session_manager()
+    
+    # First, get all steps and their relationships
+    with session_manager.driver.get_session() as session:
+        # Get all steps with ALL their properties
+        steps_result = session.run("""
+            MATCH (s:STEP)
+            RETURN s.id as id, properties(s) as properties
+        """)
+        
+        steps = {record["id"]: record["properties"] for record in steps_result}
+        
+        # Get all relationships
+        rels_result = session.run("""
+            MATCH (source:STEP)-[r:NEXT]->(target:STEP)
+            RETURN source.id as source, target.id as target, properties(r) as properties
+        """)
+        
+        # Organize relationships by source
+        relationships = {}
+        for record in rels_result:
+            source = record["source"]
+            target = record["target"]
+            props = record["properties"]
+            
+            if source not in relationships:
+                relationships[source] = []
+                
+            relationships[source].append({
+                "target": target,
+                "properties": props
+            })
+    
+    print("\n=== WORKFLOW HIERARCHY ===")
+    
+    # Set to track visited nodes to handle loops
+    visited = set()
+    loop_markers = set()
+    
+    # Recursive function to traverse the workflow
+    def traverse_workflow(step_id, depth=0, path=None):
+        if path is None:
+            path = []
+            
+        # Indent based on depth
+        indent = "  " * depth
+        
+        # Mark if this is a loop
+        loop_indicator = ""
+        path_str = f"{step_id}"
+        
+        if step_id in path:
+            loop_indicator = " (LOOP BACK)"
+            loop_markers.add(step_id)
+            print(f"{indent}└─ {path_str}{loop_indicator}")
+            return
+            
+        # Add current step to path
+        new_path = path + [step_id]
+        
+        # Print current step with all its properties
+        print(f"{indent}├─ {path_str}")
+        
+        if step_id in steps:
+            step_props = steps[step_id]
+            print(f"{indent}│  Step Properties:")
+            
+            # Display all properties of the step
+            for key, value in step_props.items():
+                # Skip id since we already displayed it
+                if key == "id":
+                    continue
+                    
+                print(f"{indent}│    {key}: {value}")
+                
+                # Try to parse JSON for any string property
+                if value and isinstance(value, str):
+                    try:
+                        json_data = json.loads(value)
+                        print(f"{indent}│    Parsed {key}: {json.dumps(json_data, indent=6)}")
+                    except json.JSONDecodeError:
+                        pass  # Not valid JSON, that's fine
+        
+        # If already visited or no outgoing relationships, stop
+        if step_id in visited or step_id not in relationships:
+            visited.add(step_id)
+            return
+            
+        # Mark as visited
+        visited.add(step_id)
+        
+        # Process child relationships
+        for i, rel in enumerate(relationships[step_id]):
+            target = rel["target"]
+            props = rel["properties"]
+            
+            # Display branch conditions if they exist
+            print(f"{indent}│  → {target}")
+            
+            if props:
+                print(f"{indent}│    Relationship Properties:")
+                for key, value in props.items():
+                    print(f"{indent}│      {key}: {value}")
+                    
+                    # Try to parse JSON for any string property
+                    if value and isinstance(value, str):
+                        try:
+                            json_data = json.loads(value)
+                            print(f"{indent}│      Parsed {key}: {json.dumps(json_data, indent=6)}")
+                        except json.JSONDecodeError:
+                            pass  # Not valid JSON, that's fine
+            
+            # Traverse to target
+            traverse_workflow(target, depth + 1, new_path)
+    
+    # Start traversal from root
+    if "root" in steps:
+        traverse_workflow("root")
+    else:
+        print("No root step found. Starting from all steps with no incoming relationships...")
+        
+        # Find steps with no incoming relationships
+        with session_manager.driver.get_session() as session:
+            roots_result = session.run("""
+                MATCH (s:STEP)
+                WHERE NOT ()-[:NEXT]->(s)
+                RETURN s.id as id
+            """)
+            
+            roots = [record["id"] for record in roots_result]
+            
+            if not roots:
+                print("No root steps found. Using any step as start point...")
+                if steps:
+                    traverse_workflow(next(iter(steps)))
+            else:
+                for root in roots:
+                    traverse_workflow(root)
+    
+    # Print information about loops detected
+    if loop_markers:
+        print("\n=== LOOPS DETECTED ===")
+        for loop_node in loop_markers:
+            print(f"Loop at: {loop_node}")
 
 def trace_execution_path():
     """Trace the execution path for a user query."""
@@ -274,5 +426,6 @@ def fix_issues_immediately():
 if __name__ == "__main__":
     inspect_workflow_steps()
     inspect_workflow_relationships()
+    visualize_workflow_hierarchy()
     trace_execution_path()
     fix_issues_immediately() 
