@@ -62,10 +62,46 @@ The `state` JSON contains the following structure:
     "outputs": {                 // Results from each step
       "step_id": [],             // Array of outputs, most recent last (max 5)
     },
-    "messages": []               // Optional chat history
+    "messages": []               // Chat history with timestamp ordering
   }
 }
 ```
+
+### Message Handling Architecture
+
+The system manages conversation messages using a dedicated message handling approach:
+
+1. **Single Source of Truth**
+   - Messages are stored only in the `state.data.messages` array
+   - Each message is added exactly once with appropriate timestamps
+   - Message objects include:
+     ```json
+     {
+       "role": "user|assistant",
+       "content": "message content",
+       "_message_id": "unique-id",
+       "timestamp": 1234567890
+     }
+     ```
+
+2. **Message Flow and Ordering**
+   - User messages are added when received
+   - Assistant responses are added after processing completes
+   - Prompts (questions to the user) are added with explicit checks for duplicates
+   - Timestamps ensure chronological ordering in the UI
+
+3. **Separation of Concerns**
+   - Step outputs contain function results in `state.data.outputs`
+   - UI-facing messages are stored in `state.data.messages` 
+   - `awaiting_input` object only contains UI options and non-prompt fields
+   - This separation prevents message duplication in the UI
+
+4. **Duplicate Prevention**
+   - Messages are checked against existing content before adding
+   - Messages with the same content are not added twice
+   - This is critical for workflows with repeated patterns and loops
+
+This architecture ensures UI consistency and prevents message duplication issues when the same step is executed multiple times or when a workflow loop occurs.
 
 ## Core Components
 
