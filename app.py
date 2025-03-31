@@ -119,11 +119,71 @@ def create_session():
                         
                         # Handle array-based outputs (get most recent)
                         if isinstance(outputs, list) and outputs:
-                            awaiting_input = outputs[-1]  # Get the most recent output
+                            await_data = outputs[-1]  # Get the most recent output
                         else:
                             # Backward compatibility for non-array outputs
-                            awaiting_input = outputs
-                    break
+                            await_data = outputs
+                        
+                        # Add the prompt to the messages array if not already there
+                        if await_data and isinstance(await_data, dict):
+                            prompt_fields = ["prompt", "query", "message", "content", "text"]
+                            prompt_content = None
+                            
+                            for field in prompt_fields:
+                                if field in await_data and await_data[field]:
+                                    prompt_content = await_data[field]
+                                    break
+                                    
+                            if prompt_content:
+                                # Create a prompt message
+                                prompt_message = {
+                                    "role": "assistant", 
+                                    "content": prompt_content,
+                                    "_prompt_id": str(uuid.uuid4())[:8],
+                                    "timestamp": time.time()
+                                }
+                                
+                                # Add the prompt message if not already in messages
+                                def update_with_prompt(current_state):
+                                    if "data" not in current_state:
+                                        current_state["data"] = {}
+                                    if "messages" not in current_state["data"]:
+                                        current_state["data"]["messages"] = []
+                                        
+                                    # Check if this prompt is already in messages to avoid duplication
+                                    prompt_already_added = False
+                                    for msg in current_state["data"]["messages"]:
+                                        if msg.get("role") == "assistant" and msg.get("content") == prompt_content:
+                                            prompt_already_added = True
+                                            break
+                                            
+                                    if not prompt_already_added:
+                                        current_state["data"]["messages"].append(prompt_message)
+                                        logger.info(f"Added initial prompt message: '{prompt_content[:50]}...'")
+                                    else:
+                                        logger.info(f"Initial prompt already in messages, not adding duplicate")
+                                    
+                                    return current_state
+                                
+                                session_manager.update_session_state(session_id, update_with_prompt)
+                                
+                                # Get updated state with the prompt message
+                                state = session_manager.get_session_state(session_id)
+                        
+                        # Create awaiting_input object without prompt content (already in messages)
+                        awaiting_input = {}
+                        
+                        # Only include non-prompt fields
+                        if await_data:
+                            for key, value in await_data.items():
+                                # Skip prompt fields that are already in messages
+                                if key not in ["prompt", "query", "message", "content", "text"]:
+                                    awaiting_input[key] = value
+                            
+                            # Keep options data for UI
+                            if "options" in await_data:
+                                awaiting_input["options"] = await_data["options"]
+                        break
         else:
             logger.warning(f"Workflow completed immediately with status: {status}")
             
@@ -164,6 +224,33 @@ def send_message(session_id):
         logger.info(f"Handling user input for session {session_id}")
         status = engine.handle_user_input(session_id, message)
         logger.info(f"Status after handling input: {status}")
+        
+        # Add timestamps to ensure chronological ordering
+        current_time = time.time()
+        
+        # Add ONLY the user message to the messages array
+        user_message = {
+            "role": "user", 
+            "content": message,
+            "_message_id": str(uuid.uuid4())[:8],
+            "timestamp": current_time
+        }
+        
+        # Add just the user message
+        def update_with_user_message(current_state):
+            if "data" not in current_state:
+                current_state["data"] = {}
+            if "messages" not in current_state["data"]:
+                current_state["data"]["messages"] = []
+            
+            # Add user message
+            current_state["data"]["messages"].append(user_message)
+            return current_state
+        
+        # Update state with user message only
+        session_manager = get_session_manager()
+        session_manager.update_session_state(session_id, update_with_user_message)
+        logger.info(f"Added user message to session state")
         
         # Continue processing the workflow until completion or awaiting input
         if status == "active":
@@ -224,27 +311,8 @@ def send_message(session_id):
                 logger.warning(f"Reached maximum workflow processing iterations for session {session_id}")
         
         # Get updated session state
-        session_manager = get_session_manager()
         state = session_manager.get_session_state(session_id)
         logger.info(f"Session state workflow steps: {list(state['workflow'].keys())}")
-        
-        # Initialize messages list if it doesn't exist
-        if "messages" not in state["data"]:
-            state["data"]["messages"] = []
-        
-        # Ensure user message is in the messages list - with deduplication
-        user_message = {"role": "user", "content": message}
-        
-        # Check if this exact user message already exists
-        user_msg_exists = False
-        for existing_msg in state["data"]["messages"]:
-            if existing_msg.get("role") == "user" and existing_msg.get("content") == message:
-                user_msg_exists = True
-                break
-                
-        if not user_msg_exists:
-            state["data"]["messages"].append(user_message)
-            logger.info(f"Added user message to conversation history: {message[:50]}")
         
         # Get response based on the updated state
         assistant_response = None
@@ -355,7 +423,9 @@ def send_message(session_id):
                             if field in output and output[field]:
                                 assistant_response = {
                                     "role": "assistant",
-                                    "content": output[field]
+                                    "content": output[field],
+                                    "_message_id": str(uuid.uuid4())[:8],
+                                    "timestamp": current_time + 1
                                 }
                                 logger.info(f"Found response in {step_id}.{field} (reply function, executed at {timestamp})")
                                 break
@@ -378,7 +448,9 @@ def send_message(session_id):
                             if isinstance(output, dict) and "response" in output:
                                 assistant_response = {
                                     "role": "assistant",
-                                    "content": output["response"]
+                                    "content": output["response"],
+                                    "_message_id": str(uuid.uuid4())[:8],
+                                    "timestamp": current_time + 1
                                 }
                                 logger.info(f"Found response in {step_id}.response (generate function)")
         
@@ -387,47 +459,28 @@ def send_message(session_id):
             logger.warning(f"No response found in workflow outputs")
             assistant_response = {
                 "role": "assistant",
-                "content": "I'm sorry, I couldn't generate a response. Please try again."
+                "content": "I'm sorry, I couldn't generate a response. Please try again.",
+                "_message_id": str(uuid.uuid4())[:8],
+                "timestamp": current_time + 1
             }
         
-        # Add the response to messages, with proper deduplication
-        assistant_content = assistant_response["content"]
-        
-        # Check if this EXACT response already exists (avoid same response being added multiple times)
-        assistant_msg_exists = False
-        for idx, existing_msg in enumerate(state["data"]["messages"]):
-            if existing_msg.get("role") == "assistant" and existing_msg.get("content") == assistant_content:
-                assistant_msg_exists = True
-                # If it's not the last message, move it to the end to maintain conversation flow
-                if idx < len(state["data"]["messages"]) - 1:
-                    state["data"]["messages"].append(existing_msg)
-                    state["data"]["messages"].pop(idx)
-                break
-                
-        if not assistant_msg_exists:
-            # Add message with unique ID for tracking
-            assistant_response["_message_id"] = str(uuid.uuid4())[:8]
-            assistant_response["timestamp"] = time.time()
-            state["data"]["messages"].append(assistant_response)
-            logger.info(f"Added new assistant response: {assistant_content[:50]}...")
+        # Add the assistant response to messages
+        def update_with_assistant_response(current_state):
+            if "data" not in current_state:
+                current_state["data"] = {}
+            if "messages" not in current_state["data"]:
+                current_state["data"]["messages"] = []
             
-            # Update the state with the new message atomically
-            def update_messages(current_state):
-                # Find if this exact message exists
-                for existing_msg in current_state["data"]["messages"]:
-                    if existing_msg.get("role") == "assistant" and existing_msg.get("content") == assistant_content:
-                        logger.info(f"Skipping duplicate assistant message during update")
-                        return current_state
-                
-                # Add if not found
-                current_state["data"]["messages"].append(assistant_response.copy())
-                return current_state
-            
-            session_manager.update_session_state(session_id, update_messages)
+            current_state["data"]["messages"].append(assistant_response)
+            return current_state
         
-        # ===== PROMPT MESSAGE HANDLING =====
-        # Check if we're awaiting input and add the prompt as a message
-        # This is the main source of duplicates, needs careful handling
+        session_manager.update_session_state(session_id, update_with_assistant_response)
+        logger.info(f"Added assistant response to messages array")
+        
+        # Get updated state with the messages
+        state = session_manager.get_session_state(session_id)
+        
+        # Check if we're awaiting input and prepare prompt information
         awaiting_input = None
         if status == "awaiting_input":
             # Find the step that's awaiting input
@@ -438,54 +491,70 @@ def send_message(session_id):
                         
                         # Handle array-based outputs
                         if isinstance(outputs, list) and outputs:
-                            awaiting_input = outputs[-1]  # Get most recent
+                            await_data = outputs[-1]  # Get most recent
                         else:
-                            awaiting_input = outputs
+                            await_data = outputs
                             
-                        # Add the prompt as a message if it exists and is not already there
-                        if awaiting_input and isinstance(awaiting_input, dict):
+                        # Add the prompt as a message if it exists and hasn't been added yet
+                        if await_data and isinstance(await_data, dict):
                             prompt_fields = ["prompt", "query", "message", "content", "text"]
+                            prompt_content = None
+                            
                             for field in prompt_fields:
-                                if field in awaiting_input and awaiting_input[field]:
-                                    prompt_content = awaiting_input[field]
-                                    
-                                    # Check if this EXACT prompt content already exists in messages
-                                    prompt_exists = False
-                                    for existing_msg in state["data"]["messages"]:
-                                        if existing_msg.get("role") == "assistant" and existing_msg.get("content") == prompt_content:
-                                            logger.info(f"PROMPT_SKIP: Skipping duplicate prompt: '{prompt_content[:50]}...'")
-                                            prompt_exists = True
-                                            break
-                                    
-                                    if not prompt_exists:
-                                        # Create a new prompt message with unique ID
-                                        prompt_message = {
-                                            "role": "assistant", 
-                                            "content": prompt_content,
-                                            "_prompt_id": str(uuid.uuid4())[:8],  # Add unique ID for tracking
-                                            "timestamp": time.time()  # Add timestamp for ordering
-                                        }
-                                        
-                                        # Add the prompt to messages
-                                        state["data"]["messages"].append(prompt_message)
-                                        logger.info(f"PROMPT_ADD: Added unique prompt message: '{prompt_content[:50]}...'")
-                                        
-                                        # Update state with prompt message atomically
-                                        def update_with_prompt(current_state):
-                                            # Check again if this exact prompt exists
-                                            for existing_msg in current_state["data"]["messages"]:
-                                                if existing_msg.get("role") == "assistant" and existing_msg.get("content") == prompt_content:
-                                                    logger.info(f"PROMPT_SKIP_UPDATE: Prompt was added by another process")
-                                                    return current_state
-                                            
-                                            # Add if still not found
-                                            current_state["data"]["messages"].append(prompt_message.copy())
-                                            logger.info(f"PROMPT_UPDATE: Added prompt in session update")
-                                            return current_state
-                                        
-                                        session_manager.update_session_state(session_id, update_with_prompt)
+                                if field in await_data and await_data[field]:
+                                    prompt_content = await_data[field]
                                     break
-                    break
+                                    
+                            if prompt_content:
+                                # Create a prompt message with later timestamp
+                                prompt_message = {
+                                    "role": "assistant", 
+                                    "content": prompt_content,
+                                    "_prompt_id": str(uuid.uuid4())[:8],
+                                    "timestamp": current_time + 2  # Ensure prompt comes last
+                                }
+                                
+                                # Add the prompt message
+                                def update_with_prompt(current_state):
+                                    if "data" not in current_state:
+                                        current_state["data"] = {}
+                                    if "messages" not in current_state["data"]:
+                                        current_state["data"]["messages"] = []
+                                        
+                                    # Check if this exact prompt is already in messages to avoid duplication
+                                    prompt_already_added = False
+                                    for msg in current_state["data"]["messages"]:
+                                        if msg.get("role") == "assistant" and msg.get("content") == prompt_content:
+                                            prompt_already_added = True
+                                            break
+                                            
+                                    if not prompt_already_added:
+                                        current_state["data"]["messages"].append(prompt_message)
+                                        logger.info(f"Added prompt message: '{prompt_content[:50]}...'")
+                                    else:
+                                        logger.info(f"Prompt already exists in messages, not adding duplicate")
+                                    
+                                    return current_state
+                                
+                                session_manager.update_session_state(session_id, update_with_prompt)
+                                
+                                # Get updated state with the prompt message
+                                state = session_manager.get_session_state(session_id)
+                        
+                        # Create awaiting_input object without prompt content (already in messages)
+                        awaiting_input = {}
+                        
+                        # Only include non-prompt fields
+                        if await_data:
+                            for key, value in await_data.items():
+                                # Skip prompt fields that are already in messages
+                                if key not in ["prompt", "query", "message", "content", "text"]:
+                                    awaiting_input[key] = value
+                            
+                            # Keep options data for UI
+                            if "options" in await_data:
+                                awaiting_input["options"] = await_data["options"]
+                        break
         
         # Return messages and current status
         return jsonify({
@@ -526,14 +595,72 @@ def get_session(session_id):
                         
                         # Handle array-based outputs (get most recent)
                         if isinstance(outputs, list) and outputs:
-                            awaiting_input = outputs[-1]  # Get the most recent output
+                            await_data = outputs[-1]  # Get the most recent output
                         else:
                             # Backward compatibility for non-array outputs
-                            awaiting_input = outputs
+                            await_data = outputs
                         
-                        # DO NOT add prompt to messages here - only return it in awaiting_input
-                        # This prevents duplicate prompts since the POST endpoint already handles it
-                        logger.info(f"GET: Found awaiting_input but not adding prompt to avoid duplicates")
+                        # Add the prompt to messages if not already there
+                        if await_data and isinstance(await_data, dict):
+                            prompt_fields = ["prompt", "query", "message", "content", "text"]
+                            prompt_content = None
+                            
+                            for field in prompt_fields:
+                                if field in await_data and await_data[field]:
+                                    prompt_content = await_data[field]
+                                    break
+                                    
+                            if prompt_content:
+                                # Check if the prompt is already in messages
+                                prompt_already_added = False
+                                for msg in state["data"]["messages"]:
+                                    if msg.get("role") == "assistant" and msg.get("content") == prompt_content:
+                                        prompt_already_added = True
+                                        break
+                                        
+                                if not prompt_already_added:
+                                    # Create a prompt message
+                                    prompt_message = {
+                                        "role": "assistant", 
+                                        "content": prompt_content,
+                                        "_prompt_id": str(uuid.uuid4())[:8],
+                                        "timestamp": time.time()
+                                    }
+                                    
+                                    # Add the message
+                                    def update_with_prompt(current_state):
+                                        if "data" not in current_state:
+                                            current_state["data"] = {}
+                                        if "messages" not in current_state["data"]:
+                                            current_state["data"]["messages"] = []
+                                        
+                                        current_state["data"]["messages"].append(prompt_message)
+                                        return current_state
+                                    
+                                    session_manager.update_session_state(session_id, update_with_prompt)
+                                    
+                                    # Get updated state with the prompt message
+                                    state = session_manager.get_session_state(session_id)
+                                    messages = state.get("data", {}).get("messages", [])
+                                    logger.info(f"Added prompt message: '{prompt_content[:50]}...'")
+                                else:
+                                    logger.info(f"Prompt already exists in messages, not adding duplicate")
+                        
+                        # Create awaiting_input object without prompt content (already in messages)
+                        awaiting_input = {}
+                        
+                        # Only include non-prompt fields
+                        if await_data:
+                            for key, value in await_data.items():
+                                # Skip prompt fields that are already in messages
+                                if key not in ["prompt", "query", "message", "content", "text"]:
+                                    awaiting_input[key] = value
+                            
+                            # Keep options data for UI
+                            if "options" in await_data:
+                                awaiting_input["options"] = await_data["options"]
+                        
+                        logger.info(f"GET: Found awaiting_input, sending options but not prompt")
                         break
                  
         return jsonify({

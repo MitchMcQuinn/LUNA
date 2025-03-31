@@ -154,12 +154,8 @@
                 
                 // Update the UI with any messages
                 if (data.messages && data.messages.length > 0) {
-                    // Sort by timestamp if available
-                    const messages = [...data.messages].sort((a, b) => {
-                        const timeA = a.timestamp || 0;
-                        const timeB = b.timestamp || 0;
-                        return timeA - timeB;
-                    });
+                    // Preserve server order - messages are already in correct conversation order
+                    const messages = [...data.messages];
                     
                     // Add messages in order
                     messages.forEach(message => {
@@ -193,7 +189,7 @@
                     role: 'user',
                     content: message,
                     _client_id: 'user-' + Date.now(), // Generate a client-side ID for reference
-                    timestamp: Date.now() / 1000  // Add timestamp for ordering
+                    timestamp: Date.now() / 1000  // Add timestamp for reference only
                 };
                 addMessageToUI(userMessage);
                 
@@ -222,18 +218,14 @@
                 document.getElementById('messageInput').disabled = false;
                 document.getElementById('sendButton').disabled = false;
                 
-                // Get all messages, sort by timestamp
+                // Get all messages, respect server ordering
                 if (data.messages && data.messages.length > 0) {
-                    // Sort by timestamp if available
-                    const sortedMessages = [...data.messages].sort((a, b) => {
-                        const timeA = a.timestamp || 0;
-                        const timeB = b.timestamp || 0;
-                        return timeA - timeB;
-                    });
+                    // Preserve server order - messages are already in correct conversation order
+                    const serverMessages = [...data.messages];
                     
                     // Clear existing messages and display all messages from server
                     document.getElementById('chatMessages').innerHTML = '';
-                    sortedMessages.forEach(message => {
+                    serverMessages.forEach(message => {
                         addMessageToUI(message);
                     });
                 }
@@ -288,7 +280,7 @@
             const optionsContainer = document.getElementById('optionsContainer');
             optionsContainer.innerHTML = '';
             
-            if (inputData.options) {
+            if (inputData && inputData.options) {
                 // Show options container
                 optionsContainer.style.display = 'flex';
                 
@@ -323,17 +315,8 @@
                 optionsContainer.style.display = 'none';
             }
             
-            // Show the prompt message if available
-            if (inputData.prompt) {
-                // Create a message object with the prompt
-                const promptMessage = {
-                    role: 'assistant',
-                    content: inputData.prompt,
-                    _client_id: 'prompt-' + Date.now(), // For tracking only
-                    timestamp: Date.now() / 1000  // Add timestamp for ordering
-                };
-                addMessageToUI(promptMessage);
-            }
+            // We no longer render prompt here as it's already included in the messages array
+            console.log('Handling awaiting input (options only, no duplicate prompt)');
         }
 
         // Event listeners
