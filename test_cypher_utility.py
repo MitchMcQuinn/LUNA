@@ -10,6 +10,7 @@ import logging
 import uuid
 import time
 from dotenv import load_dotenv
+from utils.cypher import cypher
 
 # Configure logging
 logging.basicConfig(
@@ -61,7 +62,6 @@ if not neo4j_uri or not neo4j_user or not neo4j_password:
 # Import core components
 from core.session_manager import get_session_manager
 from core.utility_registry import get_utility_registry
-from utils.cypher import execute_cypher
 
 def setup_test_data():
     """Create test data in Neo4j for the tests"""
@@ -145,7 +145,7 @@ def test_direct_mode():
     logger.info("Testing direct mode with predefined query")
     
     # Simple read query
-    result = execute_cypher(
+    result = cypher(
         query="MATCH (s:SESSION) RETURN count(s) as session_count",
         max_results=10
     )
@@ -166,7 +166,7 @@ def test_dynamic_mode():
     logger.info("Testing dynamic mode with natural language instruction")
     
     # Simple read query using natural language
-    result = execute_cypher(
+    result = cypher(
         instruction="Count how many SESSION nodes exist in the database",
         ontology="The database contains SESSION nodes with id and state properties.",
         max_results=10
@@ -189,7 +189,7 @@ def test_variable_resolution(session_id):
     logger.info("Testing variable resolution in queries")
     
     # Query using a variable reference
-    result = execute_cypher(
+    result = cypher(
         query="MATCH (s:STEP) WHERE s.id = @{" + session_id + "}.test_step[0].value RETURN s",
         session_id=session_id,
         max_results=10
@@ -207,7 +207,7 @@ def test_safety_checks():
     logger.info("Testing safety checks for write operations")
     
     # Write query with safety on
-    result = execute_cypher(
+    result = cypher(
         query="CREATE (t:TEST_NODE {id: 'temp_test'})",
         safety_on=True,
         confirmed=False
@@ -226,7 +226,7 @@ def test_write_operation_with_confirmation():
     logger.info("Testing write operation with confirmation")
     
     # Write query with confirmation
-    result = execute_cypher(
+    result = cypher(
         query="CREATE (t:TEST_NODE {id: 'temp_test'}) RETURN t",
         safety_on=True,
         confirmed=True
@@ -256,7 +256,7 @@ def test_error_handling():
     logger.info("Testing error handling for invalid queries")
     
     # Invalid query
-    result = execute_cypher(
+    result = cypher(
         query="MATCH (s:INVALID_SYNTAX WHERE s.id = 'test' RETURN s",
         max_results=10
     )
@@ -273,7 +273,7 @@ def test_retry_mechanism():
     logger.info("Testing retry mechanism")
     
     # Deliberately generate an error in dynamic mode
-    result = execute_cypher(
+    result = cypher(
         instruction="Find nodes with incorrect.syntax",
         max_retries=2  # Limit retries for test
     )
@@ -291,7 +291,7 @@ def test_result_size_limiting():
     logger.info("Testing result size limiting")
     
     # Query with small result limit
-    result = execute_cypher(
+    result = cypher(
         query="MATCH (n) RETURN n LIMIT 100",
         max_results=3  # Set very low limit for testing
     )

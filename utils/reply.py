@@ -3,6 +3,10 @@ Reply utilities for workflow responses.
 """
 
 import logging
+import uuid
+import time
+import re
+import os
 
 logger = logging.getLogger(__name__)
 
@@ -22,22 +26,20 @@ def reply(message=None, content=None, llm_response=None, end_session=False, **kw
     """
     # Determine which text to use in priority order
     if message:
-        # Use primary message if available
         text = message
         logger.info("Using primary message for response")
     elif llm_response:
-        # Use LLM response as fallback
         text = llm_response
         logger.info("Using LLM response as fallback")
     else:
-        # Use content as final fallback
         text = content
         logger.info("Using content text")
     
     if not text:
         logger.warning("No message content provided to reply")
         text = "I don't have a response to provide at this time."
-        
+    
+    # Return the result (app.py will handle adding to message history)
     result = {
         "message": text,
         "content": text,

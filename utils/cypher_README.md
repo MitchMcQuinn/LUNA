@@ -18,7 +18,7 @@ This utility allows workflows to interact with the Neo4j graph database using ei
 
 ```json
 {
-  "function": "utils.cypher.execute_cypher",
+  "function": "utils.cypher.cypher",
   "input": {
     "query": "MATCH (s:SESSION) WHERE s.created_at > datetime() - duration('P7D') RETURN s",
     "max_results": 100
@@ -30,7 +30,7 @@ This utility allows workflows to interact with the Neo4j graph database using ei
 
 ```json
 {
-  "function": "utils.cypher.execute_cypher",
+  "function": "utils.cypher.cypher",
   "input": {
     "instruction": "Find all user sessions created in the last week",
     "ontology": "SESSION nodes have id, created_at properties...",
@@ -43,7 +43,7 @@ This utility allows workflows to interact with the Neo4j graph database using ei
 
 ```json
 {
-  "function": "utils.cypher.execute_cypher",
+  "function": "utils.cypher.cypher",
   "input": {
     "query": "MATCH (s:STEP) WHERE s.id = @{SESSION_ID}.previous_step[0].value RETURN s",
     "session_id": "{SESSION_ID}"
@@ -55,7 +55,7 @@ This utility allows workflows to interact with the Neo4j graph database using ei
 
 ```json
 {
-  "function": "utils.cypher.execute_cypher",
+  "function": "utils.cypher.cypher",
   "input": {
     "query": "CREATE (n:NODE {id: 'new-node'})",
     "safety_on": true,

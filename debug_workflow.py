@@ -76,7 +76,7 @@ def inspect_recent_sessions():
                     if "movie_info" in state.get("data", {}).get("outputs", {}):
                         movie_output = state["data"]["outputs"]["movie_info"]
                         print(f"    Output: {json.dumps(movie_output, indent=2)}")
-    else:
+                    else:
                         print("    No output found")
                         
                     # If there's an error, show it
@@ -159,7 +159,7 @@ def patch_cypher_utility():
     print("\n=== ADDING DEBUG LOGGING TO CYPHER UTILITY ===")
     print("To add debug logging, edit utils/cypher.py to add more detailed logging statements.")
     print("Specifically look at:")
-    print("1. execute_cypher - Add logging before and after variable resolution")
+    print("1. cypher - Add logging before and after variable resolution")
     print("2. generate_cypher_query - Log the exact query being generated")
     print("3. execute_query - Log parameters and query execution details")
 
@@ -168,61 +168,39 @@ def run_test_query():
     print("\n=== RUNNING TEST QUERY ===")
     
     try:
-        from utils.cypher import execute_cypher
+        from utils.cypher import cypher
         
         # Get a session ID to use for variable resolution
-        session_manager = get_session_manager()
-        with session_manager.driver.get_session() as session:
-            result = session.run("""
-                MATCH (s:SESSION)
-                RETURN s.id as id
-                ORDER BY s.created_at DESC
-                LIMIT 1
-            """)
-            session_id = result.single()["id"]
-        
-        print(f"Using session ID: {session_id}")
+        session_id = "test_session"
         
         # Test with direct query
-        test_result = execute_cypher(
+        test_result = cypher(
             query="MATCH (m:Movie) WHERE m.title CONTAINS 'Fight' RETURN m"
         )
-        print("\nDirect Query Test Result:")
-        print(f"Query: {test_result.get('query')}")
-        print(f"Result: {json.dumps(test_result.get('result'), indent=2)}")
-        print(f"Overview: {test_result.get('overview')}")
+        print("Direct query result:", test_result)
         
         # Test with parameterized query
-        test_result = execute_cypher(
+        test_result = cypher(
             query="MATCH (m:Movie {title: $title}) RETURN m",
             title="Fight Club"
         )
-        print("\nParameterized Query Test Result:")
-        print(f"Query: {test_result.get('query')}")
-        print(f"Result: {json.dumps(test_result.get('result'), indent=2)}")
-        print(f"Overview: {test_result.get('overview')}")
+        print("Parameterized query result:", test_result)
         
         # Test with instruction
-        test_result = execute_cypher(
+        test_result = cypher(
             instruction="Find all information about the movie Fight Club",
         )
-        print("\nInstruction Test Result:")
-        print(f"Query: {test_result.get('query')}")
-        print(f"Result: {json.dumps(test_result.get('result'), indent=2)}")
-        print(f"Overview: {test_result.get('overview')}")
+        print("Instruction result:", test_result)
         
         # Test with more complex query to retrieve actors
-        test_result = execute_cypher(
+        test_result = cypher(
             instruction="Find the movie Fight Club and all actors who starred in it",
             ontology="The graph contains Movie nodes with properties (title, year, description) and Person nodes with properties (name, age). Persons are connected to Movies via ACTED_IN relationships."
         )
-        print("\nActor Relationship Test Result:")
-        print(f"Query: {test_result.get('query')}")
-        print(f"Result: {json.dumps(test_result.get('result'), indent=2)}")
-        print(f"Overview: {test_result.get('overview')}")
+        print("Complex query result:", test_result)
         
     except Exception as e:
-        print(f"Error running test query: {e}")
+        print(f"Error during testing: {e}")
 
 if __name__ == "__main__":
     inspect_recent_sessions()

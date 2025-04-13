@@ -191,6 +191,55 @@ def create_session():
         if "outputs" in state["data"]:
             for step_id, output in state["data"]["outputs"].items():
                 logger.info(f"Output for step {step_id}: {json.dumps(output, default=str)}")
+                
+                # Add messages from completed reply steps
+                if step_id.startswith("reply-") or step_id == "reply":
+                    # Handle array-based outputs (get most recent)
+                    if isinstance(output, list) and output:
+                        output = output[-1]  # Get the most recent output
+                    
+                    if isinstance(output, dict):
+                        message_content = None
+                        for field in ["message", "content"]:
+                            if field in output and output[field]:
+                                message_content = output[field]
+                                break
+                                
+                        if message_content:
+                            # Create message object
+                            message_obj = {
+                                "role": "assistant",
+                                "content": message_content,
+                                "_message_id": str(uuid.uuid4())[:8],
+                                "timestamp": time.time()
+                            }
+                            
+                            # Add the message if not already in messages
+                            def update_with_message(current_state):
+                                if "data" not in current_state:
+                                    current_state["data"] = {}
+                                if "messages" not in current_state["data"]:
+                                    current_state["data"]["messages"] = []
+                                    
+                                # Check if this message is already in messages
+                                message_already_added = False
+                                for msg in current_state["data"]["messages"]:
+                                    if msg.get("role") == "assistant" and msg.get("content") == message_content:
+                                        message_already_added = True
+                                        break
+                                        
+                                if not message_already_added:
+                                    current_state["data"]["messages"].append(message_obj)
+                                    logger.info(f"Added message from completed reply step: '{message_content[:50]}...'")
+                                else:
+                                    logger.info(f"Message already in messages, not adding duplicate")
+                                
+                                return current_state
+                            
+                            session_manager.update_session_state(session_id, update_with_message)
+                            
+                            # Get updated state with the message
+                            state = session_manager.get_session_state(session_id)
         
         # Initialize messages list if it doesn't exist
         if "messages" not in state["data"]:

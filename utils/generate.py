@@ -26,12 +26,60 @@ def generate(model="gpt-4o-mini", temperature=0.7, system=None, user=None, inclu
     Returns:
         Generated response (structured based on schema if provided)
     """
+    # Debug log the user input
+    logger.info(f"DEBUG - User input received: '{user}'")
+    logger.info(f"DEBUG - Is variable reference? {bool(isinstance(user, str) and '@{SESSION_ID}' in user)}")
+    
+    # Check if user input looks like an unresolved variable
+    if user is not None and isinstance(user, str) and (user.startswith('@{') or user.startswith('${')) and ('}' in user):
+        logger.error(f"User input appears to be an unresolved variable: {user}")
+        error_response = {
+            "error": "Unresolved variable in user input",
+            "message": f"I'm sorry, I couldn't process that request: Variable {user} was not resolved"
+        }
+        
+        # Add required schema fields with defaults if schema is provided
+        if schema and "required" in schema and "properties" in schema:
+            for field in schema["required"]:
+                if field not in error_response and field in schema["properties"]:
+                    prop_type = schema["properties"][field].get("type")
+                    if prop_type == "boolean":
+                        error_response[field] = False
+                    elif prop_type == "string":
+                        error_response[field] = f"Error: No {field}"
+                    elif prop_type == "number" or prop_type == "integer":
+                        error_response[field] = 0
+                    else:
+                        error_response[field] = None
+            
+            logger.warning(f"Added default values for required schema fields to error response: {list(error_response.keys())}")
+        
+        logger.error(f"Generation failed: {error_response}")
+        return error_response
+    
     # Check that we have required inputs
     if user is None:
         error_response = {
             "error": "Missing required user input",
             "message": "I'm sorry, I couldn't process that request: Missing user input"
         }
+        
+        # Add required schema fields with defaults if schema is provided
+        if schema and "required" in schema and "properties" in schema:
+            for field in schema["required"]:
+                if field not in error_response and field in schema["properties"]:
+                    prop_type = schema["properties"][field].get("type")
+                    if prop_type == "boolean":
+                        error_response[field] = False
+                    elif prop_type == "string":
+                        error_response[field] = f"Error: No {field}"
+                    elif prop_type == "number" or prop_type == "integer":
+                        error_response[field] = 0
+                    else:
+                        error_response[field] = None
+            
+            logger.warning(f"Added default values for required schema fields to error response: {list(error_response.keys())}")
+        
         logger.error(f"Generation failed: {error_response}")
         return error_response
     

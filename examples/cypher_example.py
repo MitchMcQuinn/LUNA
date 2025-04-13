@@ -91,7 +91,7 @@ def create_example_workflow():
             """
             CREATE (count:STEP {
                 id: $count_id,
-                function: 'utils.cypher.execute_cypher',
+                function: 'utils.cypher.cypher',
                 input: $input
             })
             """,
@@ -107,7 +107,7 @@ def create_example_workflow():
             """
             CREATE (find:STEP {
                 id: $find_id,
-                function: 'utils.cypher.execute_cypher',
+                function: 'utils.cypher.cypher',
                 input: $input
             })
             """,
@@ -122,7 +122,7 @@ def create_example_workflow():
             """
             CREATE (create:STEP {
                 id: $create_id,
-                function: 'utils.cypher.execute_cypher',
+                function: 'utils.cypher.cypher',
                 input: $input
             })
             """,
