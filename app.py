@@ -92,10 +92,38 @@ def create_session():
     try:
         session_manager = get_session_manager()
         workflow_id = request.json.get('workflow_id', 'default')
+        initial_data = request.json.get('initial_data', {})
+        
+        # Create session
         session_id = session_manager.create_session(workflow_id)
         
         # Store session ID in Flask session
         session['workflow_session_id'] = session_id
+        
+        # If initial data was provided, update the session state
+        if initial_data:
+            logger.info(f"Adding initial data to session {session_id}: {json.dumps(initial_data, default=str)}")
+            
+            def update_with_initial_data(current_state):
+                # Initialize data structure if needed
+                if "data" not in current_state:
+                    current_state["data"] = {}
+                if "outputs" not in current_state["data"]:
+                    current_state["data"]["outputs"] = {}
+                
+                # Add each top-level key in initial_data as a separate step output
+                # This makes them directly accessible via @{SESSION_ID}.key.subkey
+                for key, value in initial_data.items():
+                    current_state["data"]["outputs"][key] = value
+                
+                # Also add the entire initial_data object as an "initial" step output
+                # This allows accessing via @{SESSION_ID}.initial.key.subkey
+                current_state["data"]["outputs"]["initial"] = initial_data
+                
+                logger.info(f"Updated session state with initial data for keys: {list(initial_data.keys())}")
+                return current_state
+            
+            session_manager.update_session_state(session_id, update_with_initial_data)
         
         # Start the workflow
         engine = get_graph_workflow_engine()
@@ -189,18 +217,41 @@ def create_session():
             
         # Check step outputs
         if "outputs" in state["data"]:
+            # First, get function names for steps that have outputs
+            step_functions = {}
+            with get_graph_workflow_engine().session_manager.driver.get_session() as db_session:
+                for step_id in state["data"]["outputs"]:
+                    result = db_session.run(
+                        """
+                        MATCH (s:STEP {id: $id})
+                        RETURN s.function as function
+                        """,
+                        id=step_id
+                    )
+                    record = result.single()
+                    if record and record["function"]:
+                        step_functions[step_id] = record["function"]
+            
+            # Now process outputs, using function property to identify reply steps
             for step_id, output in state["data"]["outputs"].items():
                 logger.info(f"Output for step {step_id}: {json.dumps(output, default=str)}")
                 
-                # Add messages from completed reply steps
-                if step_id.startswith("reply-") or step_id == "reply":
+                # Add messages from completed reply steps (identified by function property)
+                is_reply_step = (
+                    step_id in step_functions and 
+                    step_functions[step_id] and 
+                    "reply" in step_functions[step_id].lower()
+                )
+                
+                if is_reply_step:
+                    logger.info(f"Found reply step: {step_id} with function: {step_functions.get(step_id)}")
                     # Handle array-based outputs (get most recent)
                     if isinstance(output, list) and output:
                         output = output[-1]  # Get the most recent output
                     
                     if isinstance(output, dict):
                         message_content = None
-                        for field in ["message", "content"]:
+                        for field in ["message", "content", "response"]:
                             if field in output and output[field]:
                                 message_content = output[field]
                                 break
@@ -230,7 +281,7 @@ def create_session():
                                         
                                 if not message_already_added:
                                     current_state["data"]["messages"].append(message_obj)
-                                    logger.info(f"Added message from completed reply step: '{message_content[:50]}...'")
+                                    logger.info(f"Added message from reply step {step_id}: '{message_content[:50]}...'")
                                 else:
                                     logger.info(f"Message already in messages, not adding duplicate")
                                 
@@ -390,18 +441,13 @@ def send_message(session_id):
                             result = session.run(
                                 """
                                 MATCH (s:STEP {id: $id})
-                                RETURN s.utility as utility, s.function as function
+                                RETURN s.function as function
                                 """,
                                 id=step_id
                             )
                             record = result.single()
-                            if record:
-                                # Use function if available, otherwise utility for compatibility
-                                function_value = record["function"]
-                                if function_value is None:
-                                    function_value = record["utility"]
-                                if function_value:
-                                    step_functions[step_id] = function_value
+                            if record and record["function"]:
+                                step_functions[step_id] = record["function"]
                         except Exception as e:
                             logger.warning(f"Error retrieving function for step {step_id}: {e}")
 
@@ -421,11 +467,12 @@ def send_message(session_id):
                 
                 # Add specific debug for reply step analysis
                 logger.info("===== REPLY STEP DEBUG INFO =====")
-                for step_id in state["workflow"]:
-                    if step_id == "reply" or "reply" in step_id.lower():
+                for step_id, function_name in step_functions.items():
+                    if function_name and "reply" in function_name.lower():
                         logger.info(f"Found reply step: {step_id}")
-                        logger.info(f"  Status: {state['workflow'][step_id]['status']}")
-                        logger.info(f"  Last executed: {state['workflow'][step_id].get('last_executed', 'never')}")
+                        logger.info(f"  Function: {function_name}")
+                        logger.info(f"  Status: {state['workflow'].get(step_id, {}).get('status', 'unknown')}")
+                        logger.info(f"  Last executed: {state['workflow'].get(step_id, {}).get('last_executed', 'never')}")
                         if step_id in state["data"]["outputs"]:
                             logger.info(f"  Has output: Yes")
                             try:
@@ -442,10 +489,11 @@ def send_message(session_id):
                             logger.info(f"  Has output: No")
                 
                 # Also check generate step for merits_followup value
-                for step_id in state["workflow"]:
-                    if step_id == "generate" or "generate" in step_id.lower():
+                for step_id, function_name in step_functions.items():
+                    if function_name and "generate" in function_name.lower():
                         logger.info(f"Found generate step: {step_id}")
-                        logger.info(f"  Status: {state['workflow'][step_id]['status']}")
+                        logger.info(f"  Function: {function_name}")
+                        logger.info(f"  Status: {state['workflow'].get(step_id, {}).get('status', 'unknown')}")
                         if step_id in state["data"]["outputs"]:
                             try:
                                 outputs = state["data"]["outputs"][step_id]
@@ -631,6 +679,22 @@ def get_session(session_id):
         # Check current status
         engine = get_graph_workflow_engine()
         status = engine.process_workflow(session_id)
+        
+        # Get functions for steps that have outputs
+        step_functions = {}
+        with get_graph_workflow_engine().session_manager.driver.get_session() as db_session:
+            # Get all step functions
+            for step_id in state.get("workflow", {}):
+                result = db_session.run(
+                    """
+                    MATCH (s:STEP {id: $id})
+                    RETURN s.function as function
+                    """,
+                    id=step_id
+                )
+                record = result.single()
+                if record and record["function"]:
+                    step_functions[step_id] = record["function"]
         
         # Check if the workflow is waiting for input
         awaiting_input = None

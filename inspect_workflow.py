@@ -7,6 +7,7 @@ import os
 import sys
 import json
 import logging
+import argparse
 from dotenv import load_dotenv
 
 # Configure logging
@@ -38,17 +39,39 @@ except ImportError as e:
     logger.error(f"Failed to import components: {e}")
     sys.exit(1)
 
-def inspect_workflow_steps():
+def get_available_steps():
+    """Get a list of all available step IDs in the database."""
+    session_manager = get_session_manager()
+    
+    with session_manager.driver.get_session() as session:
+        result = session.run("""
+            MATCH (s:STEP)
+            RETURN s.id as id
+            ORDER BY s.id
+        """)
+        
+        return [record["id"] for record in result]
+
+def inspect_workflow_steps(root_node=None):
     """Inspect all steps in the workflow."""
     session_manager = get_session_manager()
     
     with session_manager.driver.get_session() as session:
         print("\n=== WORKFLOW STEPS ===")
-        result = session.run("""
-            MATCH (s:STEP)
-            RETURN s.id as id, s.function as function, s.input as input
-            ORDER BY s.id
-        """)
+        
+        if root_node:
+            print(f"Focusing on root node: {root_node}")
+            result = session.run("""
+                MATCH (s:STEP {id: $root})
+                RETURN s.id as id, s.function as function, s.input as input
+            """, root=root_node)
+        else:
+            print("Showing all steps:")
+            result = session.run("""
+                MATCH (s:STEP)
+                RETURN s.id as id, s.function as function, s.input as input
+                ORDER BY s.id
+            """)
         
         for record in result:
             step_id = record["id"]
@@ -67,18 +90,29 @@ def inspect_workflow_steps():
                 except:
                     pass
 
-def inspect_workflow_relationships():
+def inspect_workflow_relationships(root_node=None):
     """Inspect relationships between steps."""
     session_manager = get_session_manager()
     
     with session_manager.driver.get_session() as session:
         print("\n=== WORKFLOW RELATIONSHIPS ===")
-        # Modified to get all relationship properties
-        result = session.run("""
-            MATCH (source:STEP)-[r:NEXT]->(target:STEP)
-            RETURN source.id as source, target.id as target, properties(r) as properties
-            ORDER BY source.id
-        """)
+        
+        if root_node:
+            print(f"Focusing on relationships from root node: {root_node}")
+            # Modified to get all relationship properties starting from root node
+            result = session.run("""
+                MATCH (source:STEP {id: $root})-[r:NEXT]->(target:STEP)
+                RETURN source.id as source, target.id as target, properties(r) as properties
+                ORDER BY source.id
+            """, root=root_node)
+        else:
+            print("Showing all relationships:")
+            # Modified to get all relationship properties
+            result = session.run("""
+                MATCH (source:STEP)-[r:NEXT]->(target:STEP)
+                RETURN source.id as source, target.id as target, properties(r) as properties
+                ORDER BY source.id
+            """)
         
         for record in result:
             source = record["source"]
@@ -100,9 +134,9 @@ def inspect_workflow_relationships():
                     except json.JSONDecodeError:
                         pass  # Not valid JSON, that's fine
 
-def visualize_workflow_hierarchy():
+def visualize_workflow_hierarchy(root_node=None):
     """
-    Visualize the hierarchical workflow structure starting from the root node.
+    Visualize the hierarchical workflow structure starting from the specified root node.
     This function shows a tree-like representation of the workflow, including branches and loops.
     """
     session_manager = get_session_manager()
@@ -220,8 +254,19 @@ def visualize_workflow_hierarchy():
             # Traverse to target
             traverse_workflow(target, depth + 1, new_path)
     
-    # Start traversal from root
-    if "root" in steps:
+    # Start traversal from specified root node
+    if root_node:
+        if root_node in steps:
+            print(f"Starting visualization from specified root node: {root_node}")
+            traverse_workflow(root_node)
+        else:
+            print(f"Specified root node '{root_node}' not found in the workflow. Available steps:")
+            for step_id in steps:
+                print(f"  - {step_id}")
+            return
+    # Start traversal from root if no specific node is given
+    elif "root" in steps:
+        print("Starting visualization from the default 'root' node")
         traverse_workflow("root")
     else:
         print("No root step found. Starting from all steps with no incoming relationships...")
@@ -250,9 +295,15 @@ def visualize_workflow_hierarchy():
         for loop_node in loop_markers:
             print(f"Loop at: {loop_node}")
 
-def trace_execution_path():
+def trace_execution_path(root_node=None):
     """Trace the execution path for a user query."""
     print("\n=== EXECUTION PATH TRACING ===")
+    
+    if root_node:
+        print(f"Tracing execution path starting from: {root_node}")
+    else:
+        print("Tracing default execution path:")
+        
     print("\nSample user query: 'Tell me about ducks'")
     print("\nFlow should be:")
     print("1. get-question prompts user & gets 'Tell me about ducks'")
@@ -423,9 +474,99 @@ def fix_issues_immediately():
         else:
             print("   - No sessions needed fixing")
 
+def inspect_session_state(session_id=None):
+    """Inspect the state of a specific session or list all sessions."""
+    session_manager = get_session_manager()
+    
+    with session_manager.driver.get_session() as session:
+        print("\n=== SESSION STATE INSPECTION ===")
+        
+        if session_id:
+            # Check specific session state
+            result = session.run("""
+                MATCH (s:SESSION {id: $id})
+                RETURN s.state as state
+            """, id=session_id)
+            
+            record = result.single()
+            if record and record["state"]:
+                state = json.loads(record["state"])
+                print(f"Session ID: {session_id}")
+                print(json.dumps(state, indent=2))
+            else:
+                print(f"No session found with ID: {session_id}")
+        else:
+            # List all available sessions
+            result = session.run("""
+                MATCH (s:SESSION)
+                RETURN s.id as id, s.created_at as created_at
+                ORDER BY s.created_at DESC
+            """)
+            
+            sessions = list(result)
+            if not sessions:
+                print("No sessions found in the database.")
+                return
+                
+            print(f"Found {len(sessions)} sessions:")
+            for record in sessions:
+                print(f"  - {record['id']} (created: {record['created_at']})")
+            
+            # Offer to inspect a specific session
+            print("\nTo inspect a specific session, run this script with:")
+            print("python inspect_workflow.py --session SESSION_ID")
+
+def main():
+    parser = argparse.ArgumentParser(description='Inspect workflow graph structure')
+    parser.add_argument('--root', type=str, help='Specify the root node ID to start inspection from')
+    parser.add_argument('--session', type=str, help='Inspect a specific session state')
+    parser.add_argument('--list-steps', action='store_true', help='List all available step IDs')
+    parser.add_argument('--fix', action='store_true', help='Apply workflow fixes')
+    args = parser.parse_args()
+    
+    # If no specific arguments are provided, ask for root node interactively
+    if not any([args.root, args.session, args.list_steps, args.fix]):
+        if args.list_steps:
+            steps = get_available_steps()
+            print("\n=== AVAILABLE STEPS ===")
+            for step in steps:
+                print(f"  - {step}")
+            return
+            
+        available_steps = get_available_steps()
+        print("\n=== WORKFLOW INSPECTION TOOL ===")
+        print("\nAvailable steps:")
+        for step in available_steps:
+            print(f"  - {step}")
+            
+        root_node = input("\nEnter root node ID to inspect (leave blank for default 'root'): ").strip()
+        if not root_node:
+            root_node = "root" if "root" in available_steps else None
+    else:
+        root_node = args.root
+        
+    # If session inspection was requested
+    if args.session:
+        inspect_session_state(args.session)
+        return
+        
+    # If listing steps was requested
+    if args.list_steps:
+        steps = get_available_steps()
+        print("\n=== AVAILABLE STEPS ===")
+        for step in steps:
+            print(f"  - {step}")
+        return
+    
+    # Run the regular inspection with specified or default root node
+    inspect_workflow_steps(root_node)
+    inspect_workflow_relationships(root_node)
+    visualize_workflow_hierarchy(root_node)
+    trace_execution_path(root_node)
+    
+    # Apply fixes if requested
+    if args.fix:
+        fix_issues_immediately()
+
 if __name__ == "__main__":
-    inspect_workflow_steps()
-    inspect_workflow_relationships()
-    visualize_workflow_hierarchy()
-    trace_execution_path()
-    fix_issues_immediately() 
+    main() 
