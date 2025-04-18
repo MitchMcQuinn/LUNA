@@ -18,16 +18,12 @@
           "type": "boolean",
           "description": "Whether the conversation warrants continuation - true if there are meaningful directions to explore, false if the conversation has reached a natural conclusion. If the user responds with a flat no then it is likely an end to the conversation, but this should be assessed within the conversational context."
         },
-        "is_movie_question": {
+        "is_moondao_question": {
           "type": "boolean",
-          "description": "Whether the user's query is about a movie or actor. Return true if the query mentions or asks about any movie, film, actor, director, or other film-related topics."
-        },
-        "movie_title": {
-          "type": "string",
-          "description": "The title of the movie mentioned in the query, or 'none' if no movie is mentioned"
+          "description": "Whether the user's query is about Moondao. Return true if the query mentions Moondao or Moondao related topics such as governance, projects, members, citizenship, onboarding, voting, the senate, community circles, rewards, the constitution, or the DAO."
         }
       },
-      "required": ["response", "followup", "merits_followup", "is_movie_question", "movie_title"]
+      "required": ["response", "followup", "merits_followup",  "is_moondao_question"]
     },
     "user": "@{SESSION_ID}.request.response"
   }

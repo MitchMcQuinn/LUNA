@@ -274,7 +274,7 @@ class GraphWorkflowEngine:
             return "error"
         
         # Handle request step (user input) differently
-        if "request" in function_name.lower():
+        if function_name.startswith('utils.request.'):
             logger.info(f"Step {step_id} is a request step, marking as awaiting input")
             
             # Get input data

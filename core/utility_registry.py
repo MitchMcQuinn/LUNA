@@ -57,12 +57,14 @@ def get_utility_registry():
             import utils.reply
             import utils.conversation
             import utils.cypher
+            import utils.api
             
             _registry.register_module("utils.generate", utils.generate)
             _registry.register_module("utils.request", utils.request)
             _registry.register_module("utils.reply", utils.reply)
             _registry.register_module("utils.conversation", utils.conversation)
             _registry.register_module("utils.cypher", utils.cypher)
+            _registry.register_module("utils.api", utils.api)
         except ImportError as e:
             logger.warning(f"Could not import utilities: {e}")
         
