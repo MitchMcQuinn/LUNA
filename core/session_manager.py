@@ -21,12 +21,24 @@ class SessionManager:
         """Create a new workflow session with initial state"""
         session_id = str(uuid.uuid4())
         
+        # Check if a step with the workflow_id exists
+        with self.driver.get_session() as session:
+            result = session.run(
+                """
+                MATCH (s:STEP {id: $id})
+                RETURN s.id as id
+                """,
+                id=workflow_id
+            )
+            initial_step = workflow_id if result.single() else "root"
+            logger.info(f"Using initial step '{initial_step}' for workflow_id '{workflow_id}'")
+        
         # Initialize the session state
         initial_state = {
             "id": session_id,
             "workflow_id": workflow_id,
             "workflow": {
-                "root": {
+                initial_step: {  # Use the identified initial step
                     "status": "active",
                     "error": "",
                     "last_executed": 0
@@ -57,7 +69,7 @@ class SessionManager:
                 state=json.dumps(initial_state)
             )
         
-        logger.info(f"Created new session {session_id} with workflow {workflow_id}")
+        logger.info(f"Created new session {session_id} with workflow {workflow_id} starting at step {initial_step}")
         return session_id
         
     def get_session_state(self, session_id):

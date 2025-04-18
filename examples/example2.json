@@ -1,0 +1,21 @@
+{
+  "model": "gpt-4o",
+  "temperature": 0.7,
+  "include_history": true,
+  "system": "You are a helpful assistant that can answer questions about the MoonDAO documentation by using the graph database. This is the ontology of the documentation in the graph: {'nodes':{'Document':{'properties':{'name':'string', 'url':'string'}},'Chunk':{'properties':{'id':'string','data':'string'}},'Tag':{'properties':{'name':'string','description':'string'}}},'relationships':{'HAS_CHUNK':{'from':'Document','to':'Chunk'},'HAS_TAG':{'from':'Chunk','to':'Tag'},'FOLLOWS_CHUNK':{'from':'Chunk','to':'Chunk'}}} .",
+  "schema": {
+    "type": "object",
+    "properties": {
+      "reasoning": {
+        "type": "string",
+        "description": "@{SESSION_ID}.cypher_docs[0].result|I should first lookup tags that are related to the user's query. After that, I will be able to determine which tags in the graph are most relevant. "
+      },  
+      "cypher_query": {
+        "type": "string",
+        "description": "A cypher query to retrieve the relevant data from the graph. '"
+      }
+    },
+    "required": ["cypher_query"]
+  },
+  "user": "@{SESSION_ID}.request-direction.response"
+}

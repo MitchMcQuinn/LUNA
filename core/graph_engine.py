@@ -89,7 +89,7 @@ class GraphWorkflowEngine:
                 
                 logger.info(f"Found {len(active_steps)} active steps: {active_steps}")
                 
-                # If no active steps, check if we need to activate the root step
+                # If no active steps, check if we need to activate the initial step
                 if not active_steps:
                     # Update execution paths to see if any completed steps should activate new ones
                     # This is crucial for continuing the workflow after user input
@@ -137,17 +137,35 @@ class GraphWorkflowEngine:
                             logger.info(f"Workflow for session {session_id} is complete (reply function step is complete and no active steps)")
                             return "complete"
                             
-                        # If reply isn't complete, we might need to activate root
-                        elif "root" in updated_state["workflow"] and updated_state["workflow"]["root"]["status"] != "complete":
-                            # Activate the root step if it's in error or inactive
-                            if updated_state["workflow"]["root"]["status"] in ["error", "pending"]:
-                                logger.info("Activating root step")
-                                def activate_root(current_state):
-                                    current_state["workflow"]["root"]["status"] = "active"
+                        # Get the initial step ID (workflow_id or fallback to "root")
+                        workflow_id = updated_state.get("workflow_id", "root")
+                        
+                        # First try to use the workflow_id as the step ID
+                        with self.session_manager.driver.get_session() as session:
+                            result = session.run(
+                                """
+                                MATCH (s:STEP {id: $id})
+                                RETURN s.id as id
+                                """,
+                                id=workflow_id
+                            )
+                            step_exists = result.single() is not None
+                        
+                        # If the step with workflow_id exists, use it as the initial step
+                        initial_step = workflow_id if step_exists else "root"
+                        logger.info(f"Determined initial step to be: {initial_step}")
+                            
+                        # Check if initial step exists and needs activation
+                        if initial_step in updated_state["workflow"] and updated_state["workflow"][initial_step]["status"] != "complete":
+                            # Activate the initial step if it's in error or inactive
+                            if updated_state["workflow"][initial_step]["status"] in ["error", "pending"]:
+                                logger.info(f"Activating initial step: {initial_step}")
+                                def activate_initial_step(current_state):
+                                    current_state["workflow"][initial_step]["status"] = "active"
                                     return current_state
                                 
-                                self.session_manager.update_session_state(session_id, activate_root)
-                                continue  # Continue to next iteration to process the root step
+                                self.session_manager.update_session_state(session_id, activate_initial_step)
+                                continue  # Continue to next iteration to process the initial step
                         
                         # If no active steps and no good reason to continue, the workflow is complete
                         logger.info(f"Workflow for session {session_id} is complete (no active steps after path evaluation)")
@@ -1044,73 +1062,76 @@ class GraphWorkflowEngine:
     def _activate_step(self, session_id, step_id, source_step, is_loop=False):
         """Activate a step in the workflow"""
         logger = logging.getLogger(__name__)
+        logger.info(f"Activating step {step_id} from source {source_step} (is_loop={is_loop})")
         
-        # Get current state
+        # Get session state to check current status
         state = self.session_manager.get_session_state(session_id)
-        if not state:
-            return "error"
-            
-        # Check current status of the step
-        current_status = None
-        if step_id in state["workflow"]:
-            current_status = state["workflow"][step_id]["status"]
-            
-        # General rule: Don't reactivate a completed step that has already collected user input
-        # This is workflow-agnostic - applies to any step with a response field containing user input
-        if current_status == "complete" and step_id in state["data"]["outputs"]:
-            output = state["data"]["outputs"][step_id]
-            if isinstance(output, dict) and output.get("waiting_for_input") is False and "response" in output:
-                # This is a completed step that received user input
-                # Only allow reactivation through explicit loop transitions
-                if source_step == "root":
-                    logger.info(f"Skipping reactivation of step with user input: {step_id}")
-                    return current_status
-            
-        # Determine what action to take based on current status
-        if current_status is None:
-            # Step not in workflow yet - add as active
-            logger.info(f"Adding new step to workflow: {step_id}")
-            
+        
+        # Get the initial step ID (workflow_id or fallback to "root")
+        workflow_id = state.get("workflow_id", "root")
+        
+        # Determine the initial step
+        with self.session_manager.driver.get_session() as session:
+            result = session.run(
+                """
+                MATCH (s:STEP {id: $id})
+                RETURN s.id as id
+                """,
+                id=workflow_id
+            )
+            initial_step = workflow_id if result.single() else "root"
+
+        # Updated to use initial_step instead of hardcoded "root"
+        if source_step == initial_step:
+            logger.info(f"Activating step {step_id} from initial step {initial_step}")
+            # When root activates a step, it's a normal flow progression
             def update_state(current_state):
-                current_state["workflow"][step_id] = {
-                    "status": "active",
-                    "error": ""
-                }
-                return current_state
+                if step_id not in current_state["workflow"]:
+                    current_state["workflow"][step_id] = {}
                 
-            self.session_manager.update_session_state(session_id, update_state)
-            return "active"
-            
-        elif current_status == "pending":
-            # Step is pending - change to active
-            logger.info(f"Activating pending step: {step_id}")
-            
-            def update_state(current_state):
                 current_state["workflow"][step_id]["status"] = "active"
+                current_state["workflow"][step_id]["error"] = ""
                 return current_state
-                
-            self.session_manager.update_session_state(session_id, update_state)
-            return "active"
             
-        elif is_loop and current_status == "complete":
-            # Handle loop activation in a general way
+            return self.session_manager.update_session_state(session_id, update_state)
+            
+        # Check if this is a loop activation
+        if is_loop:
+            logger.info(f"Loop activation of step {step_id} from source {source_step}")
+            
+            # Step is part of a loop, check if we can reactivate it
+            def update_state(current_state):
+                if step_id not in current_state["workflow"]:
+                    current_state["workflow"][step_id] = {}
+                
+                # Reset the step status for the next iteration
+                current_state["workflow"][step_id]["status"] = "active"
+                current_state["workflow"][step_id]["error"] = ""
+                
+                # Also reset any dependent steps that might be part of the loop
+                # This is important to ensure a clean loop iteration
+                return current_state
+            
+            return self.session_manager.update_session_state(session_id, update_state)
+        else:
             # Don't allow root to reactivate steps (root is not part of a loop)
-            if source_step == "root":
-                logger.info(f"Root step should not reactivate completed steps: {step_id}")
-                return current_status
+            if source_step == initial_step:
+                logger.info(f"Initial step {initial_step} should not reactivate completed steps: {step_id}")
+                return False
                 
             # Allow any non-root step to create a loop if explicitly marked as such
-            logger.info(f"Reactivating completed step for loop: {step_id} (triggered by {source_step})")
+            logger.info(f"Regular activation (non-loop) of step {step_id} from source {source_step}")
             
+            # If not a loop and not from root, it's a normal activation
             def update_state(current_state):
-                current_state["workflow"][step_id]["status"] = "active"
-                return current_state
+                if step_id not in current_state["workflow"]:
+                    current_state["workflow"][step_id] = {}
                 
-            self.session_manager.update_session_state(session_id, update_state)
-            return "active"
+                current_state["workflow"][step_id]["status"] = "active"
+                current_state["workflow"][step_id]["error"] = ""
+                return current_state
             
-        # Otherwise, keep current status
-        return current_status
+            return self.session_manager.update_session_state(session_id, update_state)
 
     def _resolve_variable_reference(self, var_reference, state):
         """
