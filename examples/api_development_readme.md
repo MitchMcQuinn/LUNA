@@ -475,8 +475,23 @@ curl -X POST http://localhost:5000/api/session \
 # Send a message (replace SESSION_ID with your actual session ID)
 curl -X POST http://localhost:5000/api/session/SESSION_ID/message \
   -H "Content-Type: application/json" \
-  -d '{"message": "Hello, how are you?"}'
+  -d '{"message": "Can you tell me about MoonDAO?"}'
+
+# Send a message with special characters (using double quotes for JSON payload)
+curl -X POST http://localhost:5000/api/session/SESSION_ID/message \
+  -H "Content-Type: application/json" \
+  -d "{\"message\": \"Here's an example with an apostrophe\"}"
+
+# Alternative approach for complex messages - create a message.json file:
+# {"message": "Here's a message with special characters: ', \", etc."}
+curl -X POST http://localhost:5000/api/session/SESSION_ID/message \
+  -H "Content-Type: application/json" \
+  -d @message.json
 
 # Get session state
 curl -X GET http://localhost:5000/api/session/SESSION_ID
 ```
+
+> **Note:** When testing with curl, be careful with special characters in JSON payloads. Single quotes within single-quoted strings can cause shell parsing errors. The approaches shown above (using double quotes with escaped quotes or using a JSON file) help avoid these issues.
+
+# Working with the API in the terminal:
