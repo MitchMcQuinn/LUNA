@@ -189,9 +189,7 @@ def create_session():
                                         current_state["data"]["messages"].append(prompt_message)
                                         logger.info(f"Added initial prompt message: '{prompt_content[:50]}...'")
                                         
-                                        # Limit to the 5 most recent messages (sliding window)
-                                        if len(current_state["data"]["messages"]) > 5:
-                                            current_state["data"]["messages"] = current_state["data"]["messages"][-5:]
+
                                     else:
                                         logger.info(f"Initial prompt already in messages, not adding duplicate")
                                     
@@ -287,9 +285,6 @@ def create_session():
                                     current_state["data"]["messages"].append(message_obj)
                                     logger.info(f"Added message from reply step {step_id}: '{message_content[:50]}...'")
                                     
-                                    # Limit to the 5 most recent messages (sliding window)
-                                    if len(current_state["data"]["messages"]) > 5:
-                                        current_state["data"]["messages"] = current_state["data"]["messages"][-5:]
                                 else:
                                     logger.info(f"Message already in messages, not adding duplicate")
                                 
@@ -354,10 +349,7 @@ def send_message(session_id):
             # Add user message
             current_state["data"]["messages"].append(user_message)
             
-            # Limit to the 5 most recent messages (sliding window)
-            if len(current_state["data"]["messages"]) > 5:
-                current_state["data"]["messages"] = current_state["data"]["messages"][-5:]
-                
+            
             return current_state
         
         # Update state with user message only
@@ -583,10 +575,7 @@ def send_message(session_id):
             
             current_state["data"]["messages"].append(assistant_response)
             
-            # Limit to the 5 most recent messages (sliding window)
-            if len(current_state["data"]["messages"]) > 5:
-                current_state["data"]["messages"] = current_state["data"]["messages"][-5:]
-                
+            
             return current_state
         
         session_manager.update_session_state(session_id, update_with_assistant_response)
@@ -647,9 +636,6 @@ def send_message(session_id):
                                         current_state["data"]["messages"].append(prompt_message)
                                         logger.info(f"Added prompt message: '{prompt_content[:50]}...'")
                                         
-                                        # Limit to the 5 most recent messages (sliding window)
-                                        if len(current_state["data"]["messages"]) > 5:
-                                            current_state["data"]["messages"] = current_state["data"]["messages"][-5:]
                                     else:
                                         logger.info(f"Prompt already exists in messages, not adding duplicate")
                                     
@@ -771,10 +757,7 @@ def get_session(session_id):
                                         
                                         current_state["data"]["messages"].append(prompt_message)
                                         
-                                        # Limit to the 5 most recent messages (sliding window)
-                                        if len(current_state["data"]["messages"]) > 5:
-                                            current_state["data"]["messages"] = current_state["data"]["messages"][-5:]
-                                            
+                                        
                                         return current_state
                                     
                                     session_manager.update_session_state(session_id, update_with_prompt)

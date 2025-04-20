@@ -418,10 +418,18 @@ class GraphWorkflowEngine:
                     # Convert existing output to array for backward compatibility
                     current_state["data"]["outputs"][step_id] = [current_state["data"]["outputs"][step_id]]
                 
-                # Add new output to the array, limiting to 5 items
+                # Add new output to the array
                 current_state["data"]["outputs"][step_id].append(result)
-                if len(current_state["data"]["outputs"][step_id]) > 5:
-                    current_state["data"]["outputs"][step_id] = current_state["data"]["outputs"][step_id][-5:]
+                
+                # Apply context_limit if specified in the step details
+                step_details = self._get_step_details(step_id)
+                if step_details and isinstance(step_details.get("input"), dict) and "context_limit" in step_details["input"]:
+                    try:
+                        context_limit = int(step_details["input"]["context_limit"])
+                        if context_limit > 0 and len(current_state["data"]["outputs"][step_id]) > context_limit:
+                            current_state["data"]["outputs"][step_id] = current_state["data"]["outputs"][step_id][-context_limit:]
+                    except (ValueError, TypeError):
+                        logger.warning(f"Invalid context_limit for step {step_id}: {step_details['input']['context_limit']}")
                 
                 # Mark step as complete
                 if step_id not in current_state["workflow"]:
@@ -923,9 +931,15 @@ class GraphWorkflowEngine:
                 # Add as new output in array
                 current_state["data"]["outputs"][awaiting_step_id].append(output)
                 
-                # Limit to 5 most recent outputs
-                if len(current_state["data"]["outputs"][awaiting_step_id]) > 5:
-                    current_state["data"]["outputs"][awaiting_step_id] = current_state["data"]["outputs"][awaiting_step_id][-5:]
+                # Apply context_limit if specified in the step details
+                step_details = self._get_step_details(awaiting_step_id)
+                if step_details and isinstance(step_details.get("input"), dict) and "context_limit" in step_details["input"]:
+                    try:
+                        context_limit = int(step_details["input"]["context_limit"])
+                        if context_limit > 0 and len(current_state["data"]["outputs"][awaiting_step_id]) > context_limit:
+                            current_state["data"]["outputs"][awaiting_step_id] = current_state["data"]["outputs"][awaiting_step_id][-context_limit:]
+                    except (ValueError, TypeError):
+                        logger.warning(f"Invalid context_limit for step {awaiting_step_id}: {step_details['input']['context_limit']}")
                 
                 # Mark step as complete
                 current_state["workflow"][awaiting_step_id]["status"] = "complete"

@@ -18,8 +18,8 @@
    - Dynamic variable references between steps
    - Format: `@{SESSION_ID}.step_id[index].field|default`
    - Optional indexing of multiple step executions
-   - Maintains a rolling window of the last 5 outputs per step
-   - Allows flexible data passing between steps and iterations
+   - Preserves complete history of step outputs by default
+   - Individual steps can specify a `context_limit` to limit the number of stored outputs
 
 4. **User Interaction Support**
    - Steps can request and await user input
@@ -111,7 +111,8 @@ A critical component for data flow between steps and iterations, resolving varia
 - Supports references to the most recent output: `@{SESSION_ID}.step_id.field`
 - Supports indexed access to output history: `@{SESSION_ID}.step_id[2].field`
 - Default behavior uses most recent output when no index specified
-- Maintains a rolling window of the last 5 outputs per step
+- Preserves complete history of step outputs by default
+- Individual steps can specify a `context_limit` in their input parameters to limit stored outputs
 
 ## Workflow Engine Logic
 
@@ -262,7 +263,8 @@ A critical component for data flow between steps and iterations, resolving varia
 - Supports references to the most recent output: `@{SESSION_ID}.step_id.field`
 - Supports indexed access to output history: `@{SESSION_ID}.step_id[2].field`
 - Default behavior uses most recent output when no index specified
-- Maintains a rolling window of the last 5 outputs per step
+- Preserves complete history of step outputs by default
+- Individual steps can specify a `context_limit` in their input parameters to limit stored outputs
 
 ## Workflow Engine Logic
 

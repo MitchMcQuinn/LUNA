@@ -16,12 +16,10 @@ logger = logging.getLogger(__name__)
 
 # Set up paths
 script_dir = os.path.dirname(os.path.abspath(__file__))
-luna_dir = os.path.join(script_dir, 'LUNA')
-if os.path.exists(luna_dir):
-    sys.path.append(luna_dir)
-    os.chdir(luna_dir)
-else:
-    sys.path.append(script_dir)
+# Add parent directory (project root) to path
+parent_dir = os.path.dirname(script_dir)
+sys.path.append(parent_dir)
+os.chdir(parent_dir)  # Change to project root directory
 
 # Load environment variables
 env_path = os.path.join(os.getcwd(), '.env.local')

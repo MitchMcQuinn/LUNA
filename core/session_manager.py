@@ -69,7 +69,15 @@ class SessionManager:
                 state=json.dumps(initial_state)
             )
         
+        # Add a noticeable header to the logs for easy session identification
+        logger.info(f"{'=' * 80}")
+        logger.info(f"{'=' * 30} NEW SESSION START {'=' * 30}")
+        logger.info(f"{'=' * 20} SESSION ID: {session_id} {'=' * 20}")
+        logger.info(f"{'=' * 20} WORKFLOW: {workflow_id} {'=' * 22}")
+        logger.info(f"{'=' * 20} INITIAL STEP: {initial_step} {'=' * 19}")
+        logger.info(f"{'=' * 80}")
         logger.info(f"Created new session {session_id} with workflow {workflow_id} starting at step {initial_step}")
+        
         return session_id
         
     def get_session_state(self, session_id):

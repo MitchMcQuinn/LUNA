@@ -465,10 +465,12 @@ curl -X POST http://localhost:5000/api/session \
 curl -X POST http://localhost:5000/api/session \
   -H "Content-Type: application/json" \
   -d '{
-    "workflow_id": "default",
+    "workflow_id": "custom-root",
     "initial_data": {
-      "user_info": {"name": "John Doe"},
-      "context": "Product inquiry"
+      "user_info": {
+        "name": "Mitchie",
+        "age": 35
+      }
     }
   }'
 
