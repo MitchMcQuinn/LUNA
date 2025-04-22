@@ -41,17 +41,24 @@ export class LunaClient {
   }
 
   /**
-   * Check if a Discord message has responses and determine if any are from bots
+   * Check if a Discord message is a reply and if it has replies
    * @param {Object} message - Discord message object
-   * @returns {Promise<Object>} Object containing has_response and has_bot_response flags
+   * @returns {Promise<Object>} Object containing is_reply, has_reply, and reply_to flags
    */
   async checkMessageResponses(message) {
     try {
       // Default values
-      let hasResponse = false;
-      let hasBotResponse = false;
+      let isReply = false;
+      let hasReply = false;
+      let replyTo = null;
 
-      // Only check if channel exists and has fetchMessages capability
+      // Check if message is a reply to another message
+      if (message.reference && message.reference.messageId) {
+        isReply = true;
+        replyTo = message.reference.messageId;
+      }
+
+      // Only check for replies if channel exists and has fetchMessages capability
       if (message.channel && typeof message.channel.messages?.fetch === 'function') {
         // Fetch recent messages in the channel
         const messages = await message.channel.messages.fetch({ limit: 20 });
@@ -59,24 +66,23 @@ export class LunaClient {
         // Look for messages that reference the current message
         messages.forEach(msg => {
           if (msg.reference && msg.reference.messageId === message.id) {
-            hasResponse = true;
-            if (msg.author.bot) {
-              hasBotResponse = true;
-            }
+            hasReply = true;
           }
         });
       }
 
       return {
-        has_response: hasResponse,
-        has_bot_response: hasBotResponse
+        is_reply: isReply,
+        has_reply: hasReply,
+        reply_to: replyTo
       };
     } catch (error) {
       console.error('Error checking message responses:', error);
       // Default to false if there's an error
       return {
-        has_response: false,
-        has_bot_response: false
+        is_reply: false,
+        has_reply: false,
+        reply_to: null
       };
     }
   }
@@ -97,8 +103,9 @@ export class LunaClient {
         // Add the response flags to context data
         contextData = {
           ...contextData,
-          has_response: responseFlags.has_response,
-          has_bot_response: responseFlags.has_bot_response
+          is_reply: responseFlags.is_reply,
+          has_reply: responseFlags.has_reply,
+          reply_to: responseFlags.reply_to
         };
       }
       

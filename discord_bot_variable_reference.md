@@ -47,8 +47,9 @@ For Discord bot integration, initial context data is available under the `initia
 
 ### Threading Variables
 ```
-@{SESSION_ID}.initial.has_response             // Boolean flag indicating if message already has a response
-@{SESSION_ID}.initial.has_bot_response         // Boolean flag indicating if message has a response from a bot
+@{SESSION_ID}.initial.is_reply                // Boolean flag indicating if the message is a reply to another message
+@{SESSION_ID}.initial.has_reply               // Boolean flag indicating if the message has any replies
+@{SESSION_ID}.initial.reply_to                // Message ID of the message being replied to (null if not a reply)
 ```
 
 ## User Information
@@ -174,8 +175,8 @@ When a message is part of a reply chain, the bot collects the entire thread hist
     {
       "operator": "OR",
       "false": [
-        "@{SESSION_ID}.initial.has_response",
-        "@{SESSION_ID}.initial.has_bot_response"
+        "@{SESSION_ID}.initial.has_reply",
+        "@{SESSION_ID}.initial.is_reply && @{SESSION_ID}.initial.reply_to"
       ]
     }
   ]
@@ -188,7 +189,7 @@ When a message is part of a reply chain, the bot collects the entire thread hist
 2. For arrays like `roles` and `attachments`, check length or use appropriate indexing
 3. Remember that all timestamps are in ISO format and may need conversion
 4. For complex conditionals, use transform steps to evaluate expressions first
-5. Use the `has_response` and `has_bot_response` flags to create workflows that avoid duplicate responses or bot response chains
+5. Use the `is_reply`, `has_reply`, and `reply_to` variables to create workflows that manage message threading effectively
 
 ## Debugging Variable Resolution
 
@@ -204,3 +205,26 @@ If you need to debug variable resolution, create a transform step that outputs t
 ```
 
 This will output the complete context object for inspection in your workflow's state. 
+
+
+
+
+{"cypher_query": "CREATE (n:NOTEPAD {author_id:'@{SESSION_ID}.initial.author.id', author_name:'@{SESSION_ID}.initial.author.name', member_role_id:'@{SESSION_ID}.initial.member.roles[0].id', member_role_name:'@{SESSION_ID}.initial.member.roles[0].name', message_id_log: '@{SESSION_ID}.initial.message.id', session_id_log: '@{SESSION_ID}.initial.session_id', description: 'Session log: @{SESSION_ID}.initial.session_id', channel_id:'@{SESSION_ID}.initial.channel.id', server_id:'@{SESSION_ID}.initial.guild.id'})"}
+
+{"cypher_query": "CREATE (n:NOTEPAD {author_id:'@{SESSION_ID}.initial.author.id', author_name:'@{SESSION_ID}.initial.author.name', member_role_id:'@{SESSION_ID}.initial.member.roles.id', member_role_name:'@{SESSION_ID}.initial.member.roles[0].name', message_id_log: '@{SESSION_ID}.initial.message.id', session_id_log: '@{SESSION_ID}.initial.session_id', description: 'Session log: @{SESSION_ID}.initial.session_id', channel_id:'@{SESSION_ID}.initial.channel.id', server_id:'@{SESSION_ID}.initial.guild.id'})"}
+
+{"cypher_query": "CREATE (n:NOTEPAD {message_id_log: '@{SESSION_ID}.initial.message.id', session_id_log: '@{SESSION_ID}.initial.session_id', description: 'Session log: @{SESSION_ID}.initial.session_id', channel_id:'@{SESSION_ID}.initial.channel.id', server_id:'@{SESSION_ID}.initial.guild.id', author_id:'@{SESSION_ID}.initial.author.id'})"}
+
+
+
+
+
+
+
+
+
+
+{"cypher_query": "CREATE (n:NOTEPAD {message_id_log: '@{SESSION_ID}.initial.message.id', session_id_log: '@{SESSION_ID}.initial.session_id', description: 'Session log: @{SESSION_ID}.initial.session_id', channel_id:'@{SESSION_ID}.initial.channel.id', server_id:'@{SESSION_ID}.initial.guild.id', author_id:'@{SESSION_ID}.initial.author.id', author_name: '@{SESSION_ID}.initial.author.username'})"}
+
+
+{"cypher_query": "CREATE (n:NOTEPAD {message_id_log: '@{SESSION_ID}.initial.message.id', session_id_log: '@{SESSION_ID}.initial.session_id', description: 'Session log: @{SESSION_ID}.initial.session_id', channel_id:'@{SESSION_ID}.initial.channel.id', server_id:'@{SESSION_ID}.initial.guild.id', author_id:'@{SESSION_ID}.initial.author.id', author_name: '@{SESSION_ID}.initial.author.username', member_role_name:'@{SESSION_ID}.initial.member.roles[0].name'})"}
