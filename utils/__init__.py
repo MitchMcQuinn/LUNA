@@ -8,5 +8,6 @@ from . import reply
 from . import cypher
 from . import conversation
 from . import api
+from . import code
 
-__all__ = ['generate', 'request', 'reply', 'cypher', 'conversation', 'api'] 
+__all__ = ['generate', 'request', 'reply', 'cypher', 'conversation', 'api', 'code'] 
