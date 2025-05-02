@@ -1,0 +1,16 @@
+{
+    "lookup_session_id": {
+        "function": "utils.cypher.cypher",
+        "input": {
+            "cypher_query": "MATCH (s:SESSION)-[:HAS_MESSAGE]->(m:MESSAGE {id: '@{SESSION_ID}.initial.message.reference.messageId'}) RETURN s.id AS session_id"
+        },
+        "name": "Read followup log",
+        "description": "read the follow up log created by the nested session to collect the target session id"
+    },
+    "create_followup_log": {
+        "function": "utils.cypher.cypher",
+        "input": {
+            "cypher_query": "MATCH (s:SESSION)-[:HAS_MESSAGE]->(m1:MESSAGE {id: '@{SESSION_ID}.initial.message.id'}) MERGE (m2:MESSAGE {id: '@{SESSION_ID}.send-followup_discord_message.response.response.id'}) MERGE (s)-[:HAS_MESSAGE]->(m2) MERGE (m1)-[:FOLLOWS_MESSAGE]->(m2) RETURN s.id AS session_id"
+        }
+    }
+} 

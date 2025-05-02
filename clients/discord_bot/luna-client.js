@@ -14,12 +14,18 @@ export class LunaClient {
    */
   async createSession(initialData = {}) {
     try {
+      // Create the session with initial data
       const response = await fetch(`${this.apiUrl}/session`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          workflow_id: this.workflowId,
-          initial_data: initialData
+          workflow_id: 'discord_operator',
+          initial_data: {
+            ...initialData,
+            channel_id: initialData.channel?.id || initialData.channel_id,
+            root: 'discord_operator',
+            session_id: null // Will be populated by the server
+          }
         })
       });
 
@@ -27,15 +33,9 @@ export class LunaClient {
         throw new Error(`Failed to create session: ${response.statusText}`);
       }
 
-      const data = await response.json();
-      
-      return {
-        sessionId: data.session_id,
-        status: data.status,
-        messages: data.messages || []
-      };
+      return await response.json();
     } catch (error) {
-      console.error('Error creating LUNA session:', error);
+      console.error('Error creating session:', error);
       throw error;
     }
   }
@@ -113,7 +113,7 @@ export class LunaClient {
       const session = await this.createSession(contextData);
       
       // Send the message to the session
-      const response = await fetch(`${this.apiUrl}/session/${session.sessionId}/message`, {
+      const response = await fetch(`${this.apiUrl}/session/${session.session_id}/message`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -144,7 +144,7 @@ export class LunaClient {
         throw new Error('No active session for this channel');
       }
 
-      const response = await fetch(`${this.apiUrl}/session/${session.sessionId}`);
+      const response = await fetch(`${this.apiUrl}/session/${session.session_id}`);
       
       if (!response.ok) {
         throw new Error(`Failed to get session state: ${response.statusText}`);
@@ -165,4 +165,39 @@ export class LunaClient {
       throw error;
     }
   }
-} 
+}
+
+/**
+ * Note on Variable Resolution in Workflows:
+ * 
+ * Discord data passed during session initialization can be accessed in workflow steps using 
+ * special variable resolution syntax.
+ * 
+ * Initial data variables are available directly under a special namespace:
+ * - @{SESSION_ID}.data.initial_data.variable_name
+ * 
+ * Common variables available from Discord initialization:
+ * - @{SESSION_ID}.data.initial_data.channel_id (Discord channel ID)
+ * - @{SESSION_ID}.data.initial_data.author (Message author info)
+ * - @{SESSION_ID}.data.initial_data.guild_id (Discord server/guild ID)
+ * - @{SESSION_ID}.data.initial_data.content (Message content)
+ * - @{SESSION_ID}.data.initial_data.is_reply (Boolean - if message is a reply)
+ * - @{SESSION_ID}.data.initial_data.has_reply (Boolean - if message has replies)
+ * - @{SESSION_ID}.data.initial_data.reply_to (Message ID this is replying to, if any)
+ * - @{SESSION_ID}.data.initial_data.message_id (Original Discord message ID)
+ * 
+ * Accessing author details:
+ * - @{SESSION_ID}.data.initial_data.author.id (Discord user ID)
+ * - @{SESSION_ID}.data.initial_data.author.username (Author's username)
+ * 
+ * Workflow Configuration Example:
+ * {
+ *   "function": "utils.code.code",
+ *   "file_path": "your_script.py",
+ *   "variables": {
+ *     "message_id": "@{SESSION_ID}.data.initial_data.message_id",
+ *     "author": "@{SESSION_ID}.data.initial_data.author.username",
+ *     "content": "@{SESSION_ID}.data.initial_data.content"
+ *   }
+ * }
+ */ 

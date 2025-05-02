@@ -31,7 +31,12 @@ def resolve_variable(var_reference, session_state):
         parts = var_reference.split('|', 1)
         var_reference = parts[0].strip()
         default_value = parts[1].strip()
-        logger.debug(f"Found default value: {default_value}")
+        
+        # If default value is itself a variable reference, resolve it
+        if '@{SESSION_ID}' in default_value:
+            logger.debug(f"Default value is a variable reference: {default_value}")
+            default_value = resolve_variable(default_value, session_state)
+            logger.debug(f"Resolved default value to: {default_value}")
     
     # Check if this is a SESSION_ID variable reference
     if not '@{SESSION_ID}' in var_reference:

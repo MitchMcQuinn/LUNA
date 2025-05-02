@@ -1,0 +1,43 @@
+{
+  "log_initial_session_message": {
+    "file_path": "log_initial_session_message.py",
+    "variables": {
+      "session_id": "@{SESSION_ID}.create_channel_session[0].response.session_id",
+      "message_id": "@{SESSION_ID}.initial.message.id",
+      "content": "@{SESSION_ID}.initial.message.content",
+      "author_username": "@{SESSION_ID}.initial.author.username",
+      "created_at": "@{SESSION_ID}.initial.message.createdAt",
+      "channel_id": "@{SESSION_ID}.initial.channel_id",
+      "guild_id": "@{SESSION_ID}.initial.guild.id"
+    }
+  },
+  "lookup_channel_session": {
+    "file_path": "lookup_channel_session.py",
+    "variables": {
+      "channel_id": "@{SESSION_ID}.initial.channel_id"
+    }
+  },
+  "log_followup_session_message": {
+    "file_path": "log_followup_session_message.py",
+    "variables": {
+      "session_id": "@{SESSION_ID}.lookup_channel_session.result.session_id",
+      "message_id": "@{SESSION_ID}.lookup_channel_session.result.message_id",
+      "response_id": "@{SESSION_ID}.send_followup_channel_session_message[0].response.messages[4]._message_id",
+      "response_content": "@{SESSION_ID}.send_followup_channel_session_message[0].response.messages[4].content",
+      "author_username": "bot",
+      "created_at": "@{SESSION_ID}.send_followup_channel_session_message[0].response.messages[4].timestamp",
+      "channel_id": "@{SESSION_ID}.initial.channel_id"
+    }
+  },
+  "lookup_followup_session_id": {
+    "file_path": "lookup_followup_session_id.py",
+    "variables": {
+      "message_id": "@{SESSION_ID}.initial.message.id",
+      "response_id": "@{SESSION_ID}.send_followup_channel_session_message[0].response.messages[4]._message_id",
+      "response_content": "@{SESSION_ID}.send_followup_channel_session_message[0].response.messages[4].content",
+      "author_username": "bot",
+      "created_at": "@{SESSION_ID}.send_followup_channel_session_message[0].response.messages[4].timestamp",
+      "channel_id": "@{SESSION_ID}.initial.channel_id"
+    }
+  }
+} 

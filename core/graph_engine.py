@@ -48,7 +48,7 @@ class GraphWorkflowEngine:
             if condition_string.strip().startswith('[') and condition_string.strip().endswith(']'):
                 parsed_condition = json.loads(condition_string)
                 if isinstance(parsed_condition, list):
-                    logger.info(f"Successfully parsed JSON condition: {parsed_condition}")
+                    logger.debug(f"Successfully parsed JSON condition: {parsed_condition}")
                     return parsed_condition
                 else:
                     logger.warning(f"Parsed JSON condition is not a list: {parsed_condition}")
@@ -73,7 +73,7 @@ class GraphWorkflowEngine:
             
             while iterations < MAX_ITERATIONS:
                 iterations += 1
-                logger.info(f"Processing workflow iteration {iterations} for session {session_id}")
+                logger.debug(f"Processing workflow iteration {iterations} for session {session_id}")
                 
                 # Get current session state
                 state = self.session_manager.get_session_state(session_id)
@@ -87,7 +87,7 @@ class GraphWorkflowEngine:
                     if info["status"] == "active":
                         active_steps.append(step_id)
                 
-                logger.info(f"Found {len(active_steps)} active steps: {active_steps}")
+                logger.debug(f"Found {len(active_steps)} active steps: {active_steps}")
                 
                 # If no active steps, check if we need to activate the initial step
                 if not active_steps:
@@ -153,7 +153,7 @@ class GraphWorkflowEngine:
                         
                         # If the step with workflow_id exists, use it as the initial step
                         initial_step = workflow_id if step_exists else "root"
-                        logger.info(f"Determined initial step to be: {initial_step}")
+                        logger.debug(f"Determined initial step to be: {initial_step}")
                             
                         # Check if initial step exists and needs activation
                         if initial_step in updated_state["workflow"] and updated_state["workflow"][initial_step]["status"] != "complete":
@@ -171,7 +171,7 @@ class GraphWorkflowEngine:
                         logger.info(f"Workflow for session {session_id} is complete (no active steps after path evaluation)")
                         return "complete"
                     else:
-                        logger.info(f"Found new active steps after path evaluation, continuing workflow")
+                        logger.debug(f"Found new active steps after path evaluation, continuing workflow")
                         continue  # Continue to next iteration with the newly activated steps
                 
                 # Process each active step
@@ -179,11 +179,11 @@ class GraphWorkflowEngine:
                 status = "active"
                 
                 for step_id in active_steps:
-                    logger.info(f"Processing step {step_id}")
+                    logger.debug(f"Processing step {step_id}")
                     
                     # Process the step
                     step_status = self._process_step(session_id, step_id)
-                    logger.info(f"Step {step_id} processed with status: {step_status}")
+                    logger.debug(f"Step {step_id} processed with status: {step_status}")
                     
                     # Update overall status
                     if step_status == "error":
@@ -222,7 +222,7 @@ class GraphWorkflowEngine:
                 
                 # If no more active steps, continue to next iteration which will check for completion
                 if not still_active:
-                    logger.info("No more active steps after processing, checking if workflow is complete")
+                    logger.debug("No more active steps after processing, checking if workflow is complete")
                     # Add a brief delay to ensure UI can sync properly before polling again
                     time.sleep(0.5)
                     
@@ -234,12 +234,12 @@ class GraphWorkflowEngine:
                             return "awaiting_input"
                 
                 # Log detailed state for debugging
-                logger.info(f"Current workflow step statuses: {[(s, updated_state['workflow'][s]['status']) for s in updated_state['workflow']]}")
+                logger.debug(f"Current workflow step statuses: {[(s, updated_state['workflow'][s]['status']) for s in updated_state['workflow']]}")
                 
                 # Log step outputs
                 if "data" in updated_state and "outputs" in updated_state["data"]:
                     for step_id, outputs in updated_state["data"]["outputs"].items():
-                        logger.info(f"Step {step_id} outputs: {json.dumps(outputs, default=str)[:500]}")
+                        logger.debug(f"Step {step_id} outputs: {json.dumps(outputs, default=str)[:500]}")
             
             # If we've reached the maximum number of iterations, something might be wrong
             logger.warning(f"Reached maximum iterations ({MAX_ITERATIONS}) for session {session_id}")
@@ -272,7 +272,7 @@ class GraphWorkflowEngine:
         function_name = step_details.get("function")
         if not function_name:
             # Step with no function is valid, treat as successful execution
-            logger.info(f"Step {step_id} has no function defined, marking as complete")
+            logger.debug(f"Step {step_id} has no function defined, marking as complete")
             
             def mark_complete_empty(state):
                 if step_id not in state["workflow"]:
@@ -310,11 +310,11 @@ class GraphWorkflowEngine:
                         if isinstance(outputs, list) and outputs:
                             last_output = outputs[-1]
                             if isinstance(last_output, dict) and "response" in last_output:
-                                logger.info(f"DEBUG: Found previous request response in {prev_step_id}: {last_output.get('response')}")
+                                logger.debug(f"Found previous request response in {prev_step_id}: {last_output.get('response')}")
                                 
                                 # Check if this is a negative response
                                 if isinstance(last_output.get("response"), str) and last_output.get("response").lower().strip() in ["no", "nope", "no way", "no thanks", "not interested"]:
-                                    logger.info(f"DEBUG: Previous response was NEGATIVE - this might affect path conditions")
+                                    logger.debug(f"Previous response was NEGATIVE - this might affect path conditions")
             
             # Store the resolved input as step output
             def set_awaiting_input(current_state):
@@ -342,7 +342,7 @@ class GraphWorkflowEngine:
                 current_state["workflow"][step_id]["status"] = "awaiting_input"
                 current_state["workflow"][step_id]["error"] = ""
                 
-                logger.info(f"Set step {step_id} to awaiting_input with input: {input_data}")
+                logger.debug(f"Set step {step_id} to awaiting_input with input: {input_data}")
                 return current_state
             
             self.session_manager.update_session_state(session_id, set_awaiting_input)
@@ -378,14 +378,14 @@ class GraphWorkflowEngine:
             
             # Check if this step needs conversation history
             if resolved_inputs.get('include_history', False):
-                logger.info(f"Adding conversation history for step {step_id}")
+                logger.debug(f"Adding conversation history for step {step_id}")
                 
                 # Add message history from session state if it exists
                 if "data" in state and "messages" in state["data"]:
                     history = state["data"]["messages"]
                     # Add conversation history directly to resolved inputs
                     resolved_inputs['history'] = history
-                    logger.info(f"Added {len(history)} messages from session history")
+                    logger.debug(f"Added {len(history)} messages from session history")
                 else:
                     logger.warning(f"No messages found in session state for history")
                     resolved_inputs['history'] = []
@@ -399,9 +399,9 @@ class GraphWorkflowEngine:
                 return "error"
             
             # Execute the utility function
-            logger.info(f"Executing function {function_name} for step {step_id}")
+            logger.debug(f"Executing function {function_name} for step {step_id}")
             result = utility_func(**resolved_inputs)
-            logger.info(f"Function {function_name} execution completed")
+            logger.debug(f"Function {function_name} execution completed")
             
             # Store result in session state
             def update_with_result(current_state):
@@ -438,7 +438,7 @@ class GraphWorkflowEngine:
                 current_state["workflow"][step_id]["error"] = ""
                 current_state["workflow"][step_id]["last_executed"] = current_time
                 
-                logger.info(f"DEBUG: Completed step {step_id} with function {function_name} and result: {json.dumps(result, default=str)[:500]}")
+                logger.debug(f"Completed step {step_id} with function {function_name}")
                 return current_state
             
             self.session_manager.update_session_state(session_id, update_with_result)
@@ -512,7 +512,7 @@ class GraphWorkflowEngine:
         
         # Get last evaluation timestamp, default to 0 if not set
         last_evaluated = state.get("last_evaluated", 0)
-        logger.info(f"Last path evaluation timestamp: {last_evaluated}")
+        logger.debug(f"Last path evaluation timestamp: {last_evaluated}")
         
         # Find steps that were completed since the last evaluation
         recently_completed_steps = []
@@ -525,16 +525,16 @@ class GraphWorkflowEngine:
                 step_executed = info.get("last_executed", 0)
                 if step_executed > last_evaluated:
                     recently_completed_steps.append(step_id)
-                    logger.info(f"Found recently completed step: {step_id} (executed at {step_executed})")
+                    logger.debug(f"Found recently completed step: {step_id} (executed at {step_executed})")
         
         # If no recently completed steps, try using all completed steps, but more cautiously
         if not recently_completed_steps:
-            logger.info("No recently completed steps, checking all completed steps as fallback")
+            logger.debug("No recently completed steps, checking all completed steps as fallback")
             
             # Get all completed steps
             all_completed_steps = [step_id for step_id, info in state["workflow"].items() 
                                   if info["status"] == "complete"]
-            logger.info(f"Found {len(all_completed_steps)} completed steps as fallback")
+            logger.debug(f"Found {len(all_completed_steps)} completed steps as fallback")
             
             # Check for any active steps before assuming conversation should end
             active_steps = [step_id for step_id, info in state["workflow"].items() 
@@ -542,7 +542,7 @@ class GraphWorkflowEngine:
             
             # Only if we have no active steps AND we have at least one completed step, we might consider ending
             if not active_steps and all_completed_steps:
-                logger.info("No active steps found, checking if this is a natural end or needs continuation")
+                logger.debug("No active steps found, checking if this is a natural end or needs continuation")
                 
                 # Get the most recently completed step
                 latest_step = None
@@ -554,11 +554,11 @@ class GraphWorkflowEngine:
                         latest_step = step_id
                 
                 if latest_step:
-                    logger.info(f"Most recently completed step: {latest_step}")
+                    logger.debug(f"Most recently completed step: {latest_step}")
                     recently_completed_steps = [latest_step]
                 else:
                     # If we can't determine a latest step, use the default logic
-                    logger.info("Using all completed steps to evaluate paths")
+                    logger.debug("Using all completed steps to evaluate paths")
                     recently_completed_steps = all_completed_steps
             else:
                 # Either we have active steps or no completed steps - use all completed
@@ -566,14 +566,14 @@ class GraphWorkflowEngine:
         
         # If still no steps to process, return
         if not recently_completed_steps:
-            logger.info("No completed steps to evaluate paths for")
+            logger.debug("No completed steps to evaluate paths for")
             return
         
-        logger.info(f"DEBUG: Found {len(recently_completed_steps)} completed steps to evaluate: {recently_completed_steps}")
+        logger.debug(f"Found {len(recently_completed_steps)} completed steps to evaluate: {recently_completed_steps}")
         
         # Check for special information in the current state
         # Look for specific values that might affect path decisions
-        logger.info("===== DEBUG: CRITICAL PATH VALUES =====")
+        logger.debug("===== CRITICAL PATH VALUES =====")
         try:
             # Look for request steps with responses - especially "no" responses
             request_responses = []
@@ -584,7 +584,7 @@ class GraphWorkflowEngine:
                         if isinstance(last_output, dict) and "response" in last_output:
                             request_responses.append((step_id, last_output.get("response")))
             if request_responses:
-                logger.info(f"Found request responses: {request_responses}")
+                logger.debug(f"Found request responses: {request_responses}")
             
             # Look for merits_followup values
             generate_steps = []
@@ -595,7 +595,7 @@ class GraphWorkflowEngine:
                         if isinstance(last_output, dict) and "merits_followup" in last_output:
                             generate_steps.append((step_id, last_output.get("merits_followup")))
             if generate_steps:
-                logger.info(f"Found generate steps with merits_followup values: {generate_steps}")
+                logger.debug(f"Found generate steps with merits_followup values: {generate_steps}")
                 
             # Check for path conflicts
             # If we have a "no" in request but merits_followup is true, that could explain issues
@@ -609,7 +609,7 @@ class GraphWorkflowEngine:
                 
         except Exception as e:
             logger.error(f"Error checking for critical path values: {e}")
-        logger.info("=======================================")
+        logger.debug("=======================================")
         
         # Find all outgoing paths from recently completed steps
         with self.session_manager.driver.get_session() as session:
@@ -619,12 +619,12 @@ class GraphWorkflowEngine:
                     step_outputs = state["data"]["outputs"][step_id]
                     if isinstance(step_outputs, list) and step_outputs:
                         latest_output = step_outputs[-1]
-                        logger.info(f"DEBUG: Latest output from step {step_id}: {json.dumps(latest_output, default=str)[:200]}")
+                        logger.debug(f"Latest output from step {step_id}: {json.dumps(latest_output, default=str)[:200]}")
                         # Look for key fields that might be used in conditions
                         if isinstance(latest_output, dict):
                             for key in ['merits_followup', 'response', 'is_movie_question']:
                                 if key in latest_output:
-                                    logger.info(f"DEBUG: Key field in {step_id}: {key}={latest_output[key]}")
+                                    logger.debug(f"Key field in {step_id}: {key}={latest_output[key]}")
                 
                 # Use a simpler query that doesn't rely on optional properties
                 try:
@@ -645,14 +645,14 @@ class GraphWorkflowEngine:
                         condition = record.get("condition") or []
                         operator = record.get("operator") or "AND"
                         
-                        logger.info(f"Found path from {step_id} to {target_id}")
-                        logger.info(f"DEBUG: Path condition: {condition}")
+                        logger.debug(f"Found path from {step_id} to {target_id}")
+                        logger.debug(f"Path condition: {condition}")
                         
                         # Skip if target step is already active or awaiting input
                         # BUT allow reactivation of completed steps for loop support
                         if (target_id in state["workflow"] and 
                             state["workflow"][target_id]["status"] in ["active", "awaiting_input"]):
-                            logger.info(f"Target step {target_id} is already {state['workflow'][target_id]['status']}, skipping")
+                            logger.debug(f"Target step {target_id} is already {state['workflow'][target_id]['status']}, skipping")
                             continue
                         
                         # Check if target step is in error state
@@ -668,7 +668,7 @@ class GraphWorkflowEngine:
                             
                             # Parse condition using the helper method
                             condition = self._parse_condition_string(condition)
-                            logger.info(f"DEBUG: Parsed condition: {condition}")
+                            logger.debug(f"Parsed condition: {condition}")
                             
                             # Evaluate each condition
                             for cond in condition:
@@ -684,7 +684,7 @@ class GraphWorkflowEngine:
                                         result = self.variable_resolver.resolve_variable(cond, state)
                                         condition_result = bool(result)
                                         condition_results.append(condition_result)
-                                        logger.info(f"Evaluated string condition '{cond}' to {condition_result}, raw value: {result}")
+                                        logger.debug(f"Evaluated string condition '{cond}' to {condition_result}, raw value: {result}")
                                     except Exception as e:
                                         logger.error(f"Error evaluating string condition '{cond}': {e}")
                                         condition_results.append(False)
@@ -706,7 +706,7 @@ class GraphWorkflowEngine:
                                             
                                             true_result = self.variable_resolver.resolve_variable(true_var, state)
                                             true_condition = bool(true_result)
-                                            logger.info(f"Evaluated 'true' condition '{true_var}' to {true_condition}, raw value: {true_result}")
+                                            logger.debug(f"Evaluated 'true' condition '{true_var}' to {true_condition}, raw value: {true_result}")
                                             
                                             if condition_operation_result is None:
                                                 condition_operation_result = true_condition
@@ -726,7 +726,7 @@ class GraphWorkflowEngine:
                                             
                                             false_result = self.variable_resolver.resolve_variable(false_var, state)
                                             false_condition = not bool(false_result)
-                                            logger.info(f"Evaluated 'false' condition '{false_var}' to {false_condition}, raw value: {false_result}")
+                                            logger.debug(f"Evaluated 'false' condition '{false_var}' to {false_condition}, raw value: {false_result}")
                                             
                                             if condition_operation_result is None:
                                                 condition_operation_result = false_condition
@@ -737,7 +737,7 @@ class GraphWorkflowEngine:
                                         
                                         if condition_operation_result is not None:
                                             condition_results.append(condition_operation_result)
-                                            logger.info(f"Evaluated JSON condition to {condition_operation_result} with operator {condition_operator}")
+                                            logger.debug(f"Evaluated JSON condition to {condition_operation_result} with operator {condition_operator}")
                                         else:
                                             logger.warning(f"JSON condition had no 'true' or 'false' keys: {cond}")
                                             condition_results.append(False)
@@ -757,11 +757,11 @@ class GraphWorkflowEngine:
                                 logger.warning(f"Unknown operator '{operator}', defaulting to AND")
                                 should_activate = all(condition_results)
                             
-                            logger.info(f"DEBUG: Path activation decision for {step_id} -> {target_id}: condition_results={condition_results}, operator={operator}, should_activate={should_activate}")
+                            logger.debug(f"Path activation decision for {step_id} -> {target_id}: condition_results={condition_results}, operator={operator}, should_activate={should_activate}")
                         
                         # If conditions pass, queue this step for activation
                         if should_activate:
-                            logger.info(f"Queueing step {target_id} for activation from {step_id}")
+                            logger.debug(f"Queueing step {target_id} for activation from {step_id}")
                             steps_to_activate.append(target_id)
                 except Exception as e:
                     logger.error(f"Error evaluating paths from step {step_id}: {e}")
@@ -769,7 +769,7 @@ class GraphWorkflowEngine:
         # Now apply all activations in a single atomic update
         if steps_to_activate:
             def activate_multiple_steps(current_state):
-                logger.info(f"DEBUG: Step status before activation {[f'{s}: {current_state['workflow'].get(s, {}).get('status', 'unknown')}' for s in steps_to_activate]}")
+                logger.debug(f"DEBUG: Step status before activation {[f'{s}: {current_state['workflow'].get(s, {}).get('status', 'unknown')}' for s in steps_to_activate]}")
                 
                 for target_id in steps_to_activate:
                     if target_id not in current_state["workflow"]:
@@ -783,11 +783,11 @@ class GraphWorkflowEngine:
                 # Update the last_evaluated timestamp
                 current_state["last_evaluated"] = current_time
                 
-                logger.info(f"DEBUG: Step status after activation {[f'{s}: {current_state['workflow'].get(s, {}).get('status', 'unknown')}' for s in steps_to_activate]}")
+                logger.debug(f"DEBUG: Step status after activation {[f'{s}: {current_state['workflow'].get(s, {}).get('status', 'unknown')}' for s in steps_to_activate]}")
                 return current_state
                 
             self.session_manager.update_session_state(session_id, activate_multiple_steps)
-            logger.info(f"Activated {len(steps_to_activate)} steps in a single atomic update: {steps_to_activate}")
+            logger.debug(f"Activated {len(steps_to_activate)} steps in a single atomic update: {steps_to_activate}")
         else:
             # Just update the timestamp if no steps were activated
             def update_timestamp(current_state):
@@ -795,11 +795,11 @@ class GraphWorkflowEngine:
                 return current_state
             
             self.session_manager.update_session_state(session_id, update_timestamp)
-            logger.info(f"Updated last_evaluated timestamp to {current_time}")
+            logger.debug(f"Updated last_evaluated timestamp to {current_time}")
             
         # Get updated state and check status for critical debugging
         updated_state = self.session_manager.get_session_state(session_id)
-        logger.info(f"DEBUG: Final workflow status after path evaluation: {[(s, updated_state['workflow'][s]['status']) for s in updated_state['workflow']]}")
+        logger.debug(f"DEBUG: Final workflow status after path evaluation: {[(s, updated_state['workflow'][s]['status']) for s in updated_state['workflow']]}")
     
     def _get_outgoing_relationships(self, step_id):
         """Get outgoing NEXT relationships from a step"""
@@ -1013,7 +1013,7 @@ class GraphWorkflowEngine:
                         for expected_value, variable_ref in condition.items():
                             # Resolve the variable
                             actual_value = resolve_variable(variable_ref, state)
-                            logger.info(f"CONDITION CHECK: {actual_value} == {expected_value}?")
+                            logger.debug(f"CONDITION CHECK: {actual_value} == {expected_value}?")
                             
                             # Convert to string for comparison
                             if expected_value.lower() in ('true', 'false'):
@@ -1057,7 +1057,7 @@ class GraphWorkflowEngine:
                         value = resolve_variable(condition, state)
                         conditions_met = bool(value)
                 
-                logger.info(f"Condition met for {step_id} -> {target_id}: {conditions_met}")
+                logger.debug(f"Condition met for {step_id} -> {target_id}: {conditions_met}")
                 
                 if conditions_met:
                     # Use priority if available
@@ -1076,7 +1076,7 @@ class GraphWorkflowEngine:
     def _activate_step(self, session_id, step_id, source_step, is_loop=False):
         """Activate a step in the workflow"""
         logger = logging.getLogger(__name__)
-        logger.info(f"Activating step {step_id} from source {source_step} (is_loop={is_loop})")
+        logger.debug(f"Activating step {step_id} from source {source_step} (is_loop={is_loop})")
         
         # Get session state to check current status
         state = self.session_manager.get_session_state(session_id)
@@ -1097,7 +1097,7 @@ class GraphWorkflowEngine:
 
         # Updated to use initial_step instead of hardcoded "root"
         if source_step == initial_step:
-            logger.info(f"Activating step {step_id} from initial step {initial_step}")
+            logger.debug(f"Activating step {step_id} from initial step {initial_step}")
             # When root activates a step, it's a normal flow progression
             def update_state(current_state):
                 if step_id not in current_state["workflow"]:
@@ -1111,7 +1111,7 @@ class GraphWorkflowEngine:
             
         # Check if this is a loop activation
         if is_loop:
-            logger.info(f"Loop activation of step {step_id} from source {source_step}")
+            logger.debug(f"Loop activation of step {step_id} from source {source_step}")
             
             # Step is part of a loop, check if we can reactivate it
             def update_state(current_state):
@@ -1130,11 +1130,11 @@ class GraphWorkflowEngine:
         else:
             # Don't allow root to reactivate steps (root is not part of a loop)
             if source_step == initial_step:
-                logger.info(f"Initial step {initial_step} should not reactivate completed steps: {step_id}")
+                logger.debug(f"Initial step {initial_step} should not reactivate completed steps: {step_id}")
                 return False
                 
             # Allow any non-root step to create a loop if explicitly marked as such
-            logger.info(f"Regular activation (non-loop) of step {step_id} from source {source_step}")
+            logger.debug(f"Regular activation (non-loop) of step {step_id} from source {source_step}")
             
             # If not a loop and not from root, it's a normal activation
             def update_state(current_state):
@@ -1190,7 +1190,7 @@ class GraphWorkflowEngine:
                     else:
                         return None
                     
-            logger.info(f"Resolved variable {var_reference} to {value}")
+            logger.debug(f"Resolved variable {var_reference} to {value}")
             return value
         except Exception as e:
             logger.error(f"Error resolving variable {var_reference}: {e}")

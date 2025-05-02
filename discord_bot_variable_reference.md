@@ -1,8 +1,14 @@
-# Discord Bot Variable Reference Guide
-
+# Discord Bot Variable Referen 
 ## Introduction
 
 This guide documents all available Discord context variables that the Discord bot client adds to the LUNA session state. These variables can be referenced in your workflow steps using LUNA's variable resolution system.
+
+## Session Information
+
+### Session Properties
+```
+@{SESSION_ID}.initial.session_id                // The unique session ID for this Discord interaction
+```
 
 ## Variable Reference Syntax
 

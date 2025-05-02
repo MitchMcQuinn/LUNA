@@ -66,15 +66,6 @@ try:
     logger.info("Importing core components...")
     from core.graph_engine import get_graph_workflow_engine
     from core.session_manager import get_session_manager
-    
-    # Initialize database
-    logger.info("Initializing database...")
-    try:
-        from main import init_database
-        init_database()
-        logger.info("Database initialized successfully")
-    except Exception as e:
-        logger.warning(f"Could not initialize database: {e}")
         
 except Exception as e:
     logger.error(f"Error during initialization: {e}")

@@ -24,7 +24,35 @@ if os.path.exists(env_path):
 else:
     logger.warning(f"Environment file {env_path} not found")
 
-def code(code=None, file_path=None, session_id=None, session_state=None, env_vars=None, **kwargs):
+def sanitize_neo4j_values(values):
+    """
+    Sanitize values for Neo4j parameterized queries.
+    This function recursively handles dictionaries, lists, and scalar values
+    to ensure they are safe to use as parameters in Neo4j queries.
+    
+    Args:
+        values: The value or dictionary of values to sanitize
+        
+    Returns:
+        Sanitized values that can be safely used in Neo4j parameterized queries
+    """
+    if isinstance(values, dict):
+        return {k: sanitize_neo4j_values(v) for k, v in values.items()}
+    elif isinstance(values, list):
+        return [sanitize_neo4j_values(v) for v in values]
+    elif isinstance(values, str):
+        # String values are already safely handled by the Neo4j driver's parameterized queries
+        # We just need to ensure they're valid strings
+        return values
+    elif values is None:
+        return None
+    elif isinstance(values, (int, float, bool)):
+        return values
+    else:
+        # Convert any other types to strings
+        return str(values)
+
+def code(code=None, file_path=None, session_id=None, session_state=None, env_vars=None, variables=None, **kwargs):
     """
     Execute Python code with variable resolution from session state.
     
@@ -36,6 +64,7 @@ def code(code=None, file_path=None, session_id=None, session_state=None, env_var
         session_id (str): Current session ID
         session_state (dict): Session state for variable resolution
         env_vars (list): List of environment variable names to make available
+        variables (dict): Pre-resolved variables to inject into the code's global namespace
         **kwargs: Additional variables to expose to the code
         
     Returns:
@@ -49,6 +78,15 @@ def code(code=None, file_path=None, session_id=None, session_state=None, env_var
         result = code(file_path="text_analysis.py", session_id="abc123")
         
         # The above will automatically look for the file in utils/tools/text_analysis.py
+        
+        # Example with pre-resolved variables:
+        result = code(
+            file_path="send_message.py", 
+            variables={
+                "channel_id": "1234567890", 
+                "message_content": "Hello world"
+            }
+        )
     """
     logger.info(f"Executing Python code for session {session_id}")
     
@@ -155,6 +193,23 @@ def code(code=None, file_path=None, session_id=None, session_state=None, env_var
                 else:
                     logger.warning(f"Environment variable not found: {var_name}")
         
+        # Add any pre-resolved variables from the input
+        if variables:
+            logger.info(f"Adding {len(variables)} pre-resolved variables to execution environment")
+            for var_name, var_value in variables.items():
+                # If the variable value is a template string, resolve it
+                if isinstance(var_value, str) and "@{SESSION_ID}" in var_value and session_state:
+                    resolved_value = resolve_variable(var_value, session_state)
+                    if resolved_value is not None:
+                        execution_env[var_name] = resolved_value
+                        logger.info(f"Added resolved variable: {var_name}")
+                    else:
+                        logger.warning(f"Failed to resolve variable: {var_name} = {var_value}")
+                        execution_env[var_name] = var_value
+                else:
+                    execution_env[var_name] = var_value
+                    logger.info(f"Added variable: {var_name}")
+        
         # Add any additional kwargs to the execution environment
         execution_env.update(kwargs)
         
@@ -166,6 +221,7 @@ def code(code=None, file_path=None, session_id=None, session_state=None, env_var
             "os": os,
             "sys": sys,
             "result": None,  # Will hold the result
+            "sanitize_neo4j_values": sanitize_neo4j_values,  # Make sanitize function available
             **execution_env
         }
         

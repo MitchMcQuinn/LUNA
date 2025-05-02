@@ -23,12 +23,29 @@ CREATE (extract:STEP {
       member: "@{SESSION_ID}.initial.member",
       channel: "@{SESSION_ID}.initial.channel",
       guild: "@{SESSION_ID}.initial.guild",
+      timestamp: "@{SESSION_ID}.initial.message.createdAt",
+      session_id: "@{SESSION_ID}.initial.session_id"
+    }
+  })
+})
+
+// 3. Create a step to log session information
+CREATE (log_session:STEP {
+  id: "log_session",
+  name: "Log Session Info",
+  description: "Logs session information for debugging",
+  function: "utils.data.transform",
+  input: JSON.stringify({
+    session_info: {
+      session_id: "@{SESSION_ID}.initial.session_id",
+      channel: "@{SESSION_ID}.initial.channel.name",
+      user: "@{SESSION_ID}.initial.author.username",
       timestamp: "@{SESSION_ID}.initial.message.createdAt"
     }
   })
 })
 
-// 3. Create a step to generate a response
+// 4. Create a step to generate a response
 CREATE (respond:STEP {
   id: "generate_response",
   name: "Generate Response",
@@ -42,7 +59,7 @@ CREATE (respond:STEP {
       },
       {
         role: "user", 
-        content: "Here is information about me and my message:\n\nChannel: @{SESSION_ID}.extract_discord_data.discord_data.channel.name\nUsername: @{SESSION_ID}.extract_discord_data.discord_data.user.username\nMessage: @{SESSION_ID}.extract_discord_data.message"
+        content: "Here is information about me and my message:\n\nChannel: @{SESSION_ID}.extract_discord_data.discord_data.channel.name\nUsername: @{SESSION_ID}.extract_discord_data.discord_data.user.username\nMessage: @{SESSION_ID}.extract_discord_data.message\nSession ID: @{SESSION_ID}.extract_discord_data.discord_data.session_id"
       }
     ],
     model: "gpt-3.5-turbo",
@@ -50,7 +67,7 @@ CREATE (respond:STEP {
   })
 })
 
-// 4. Create a step to format the response for Discord
+// 5. Create a step to format the response for Discord
 CREATE (format:STEP {
   id: "format_response",
   name: "Format Response",
@@ -62,13 +79,14 @@ CREATE (format:STEP {
   })
 })
 
-// 5. Connect the nodes to create the workflow
+// 6. Connect the nodes to create the workflow
 CREATE 
   (root)-[:NEXT]->(extract),
-  (extract)-[:NEXT]->(respond),
+  (extract)-[:NEXT]->(log_session),
+  (log_session)-[:NEXT]->(respond),
   (respond)-[:NEXT]->(format)
 
-// 6. Create the workflow definition
+// 7. Create the workflow definition
 CREATE (workflow:WORKFLOW {
   id: "discord-bot",
   name: "Discord Bot Workflow",
@@ -76,5 +94,5 @@ CREATE (workflow:WORKFLOW {
   root_step: "root"
 })
 
-// 7. Connect workflow to its root step
+// 8. Connect workflow to its root step
 CREATE (workflow)-[:HAS_ROOT]->(root); 

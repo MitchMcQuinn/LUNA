@@ -163,5 +163,28 @@ def test_variable_resolution():
         import traceback
         traceback.print_exc()
 
+def test_get_session_id():
+    """Test retrieving session ID using Cypher query"""
+    try:
+        session_manager = get_session_manager()
+        session_id = session_manager.create_session()
+        logger.info(f"Created session: {session_id}")
+        
+        # Use cypher utility to get session ID
+        result = cypher(
+            "MATCH (s:SESSION {id: $session_id}) RETURN s.id as session_id",
+            session_id=session_id
+        )
+        
+        assert result["error"] is None, "Query should not return an error"
+        assert result["result"][0]["session_id"] == session_id, "Returned session ID should match created session ID"
+        
+        logger.info(f"Successfully retrieved session ID: {session_id}")
+        return result
+        
+    except Exception as e:
+        logger.error(f"Error in test_get_session_id: {e}")
+        raise
+
 if __name__ == "__main__":
     test_variable_resolution() 
