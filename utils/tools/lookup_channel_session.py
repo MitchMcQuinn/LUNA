@@ -8,7 +8,6 @@ import sys
 def main():
     """
     Look up session by message reference ID to find existing sessions.
-    This helps identify if a conversation is continuing as a reply to a previous message.
     
     Required variables:
     - message_id: The Discord message ID to look up (reference.messageId)
