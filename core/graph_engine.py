@@ -586,27 +586,11 @@ class GraphWorkflowEngine:
             if request_responses:
                 logger.debug(f"Found request responses: {request_responses}")
             
-            # Look for merits_followup values
-            generate_steps = []
-            for step_id, outputs in state.get("data", {}).get("outputs", {}).items():
-                if "generate" in step_id:
-                    if isinstance(outputs, list) and outputs:
-                        last_output = outputs[-1]
-                        if isinstance(last_output, dict) and "merits_followup" in last_output:
-                            generate_steps.append((step_id, last_output.get("merits_followup")))
-            if generate_steps:
-                logger.debug(f"Found generate steps with merits_followup values: {generate_steps}")
-                
             # Check for path conflicts
-            # If we have a "no" in request but merits_followup is true, that could explain issues
+            # If we have a "no" in request
             has_no_response = any(resp and isinstance(resp, str) and resp.lower().strip() in ["no", "nope", "no way"] 
                                 for _, resp in request_responses)
-            has_true_followup = any(followup for _, followup in generate_steps)
             
-            if has_no_response and has_true_followup:
-                logger.warning("CONFLICT DETECTED: 'No' response from user but merits_followup is True")
-                logger.warning("This may explain why mutually exclusive paths are not being followed correctly")
-                
         except Exception as e:
             logger.error(f"Error checking for critical path values: {e}")
         logger.debug("=======================================")
@@ -622,7 +606,7 @@ class GraphWorkflowEngine:
                         logger.debug(f"Latest output from step {step_id}: {json.dumps(latest_output, default=str)[:200]}")
                         # Look for key fields that might be used in conditions
                         if isinstance(latest_output, dict):
-                            for key in ['merits_followup', 'response', 'is_movie_question']:
+                            for key in ['response']:
                                 if key in latest_output:
                                     logger.debug(f"Key field in {step_id}: {key}={latest_output[key]}")
                 

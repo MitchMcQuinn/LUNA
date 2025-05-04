@@ -194,12 +194,6 @@ def generate(model="gpt-4o-mini", temperature=0.7, system=None, user=None, inclu
                     
                     logger.info(f"Function response fields: {list(function_args.keys())}")
                     
-                    # Specifically log merits_followup value for debugging
-                    if "merits_followup" in function_args:
-                        logger.info(f"merits_followup value: {function_args['merits_followup']} (type: {type(function_args['merits_followup']).__name__})")
-                    else:
-                        logger.warning("merits_followup field is MISSING from response")
-                    
                     # Log full response for debugging
                     logger.info(f"Full function response: {json.dumps(function_args, default=str)[:500]}")
                     
@@ -262,12 +256,6 @@ def generate(model="gpt-4o-mini", temperature=0.7, system=None, user=None, inclu
                                     structured_response[field] = None
                     
                     logger.info(f"Created structured response with fields: {list(structured_response.keys())}")
-                    
-                    # Add detailed logging for merits_followup in structured responses
-                    if "merits_followup" in structured_response:
-                        logger.info(f"merits_followup value: {structured_response['merits_followup']} (type: {type(structured_response['merits_followup']).__name__})")
-                    else:
-                        logger.warning("merits_followup field is MISSING from structured response")
                     
                     # Log full response for debugging
                     logger.info(f"Full structured response: {json.dumps(structured_response, default=str)[:500]}")
