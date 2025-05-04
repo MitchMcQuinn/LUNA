@@ -9,7 +9,7 @@ import json
 logger = logging.getLogger(__name__)
 
 def generate(model="gpt-4o-mini", temperature=0.7, system=None, user=None, include_history=False, 
-          directly_set_reply=False, schema=None, schema_name=None, **kwargs):
+          directly_set_reply=False, schema=None, schema_name=None, agent=None, **kwargs):
     """
     Generate text using an AI model
     
@@ -22,6 +22,7 @@ def generate(model="gpt-4o-mini", temperature=0.7, system=None, user=None, inclu
         directly_set_reply: Whether to directly set reply in output
         schema: JSON schema for structured output
         schema_name: Name of a predefined schema package to use instead of providing a schema directly
+        agent: Name of a predefined agent configuration package to use for model settings
         **kwargs: Additional parameters to pass to the model
         
     Returns:
@@ -30,6 +31,36 @@ def generate(model="gpt-4o-mini", temperature=0.7, system=None, user=None, inclu
     # Debug log the user input
     logger.info(f"DEBUG - User input received: '{user}'")
     logger.info(f"DEBUG - Is variable reference? {bool(isinstance(user, str) and '@{SESSION_ID}' in user)}")
+    
+    # Load agent configuration if specified
+    if agent:
+        try:
+            from utils.agents import load_agent
+            agent_config = load_agent(agent)
+            logger.info(f"Loaded agent configuration: {agent}")
+            
+            # Apply agent configuration values, but don't override any explicitly set values
+            if "model" in agent_config and model == "gpt-4o-mini":
+                model = agent_config["model"]
+                
+            if "temperature" in agent_config and temperature == 0.7:
+                temperature = agent_config["temperature"]
+                
+            if "system" in agent_config and system is None:
+                system = agent_config["system"]
+                
+            # Apply any other agent configuration parameters as kwargs if not already set
+            # Exclude include_history as it should be controlled at the workflow level
+            for key, value in agent_config.items():
+                if key not in ["model", "temperature", "system", "include_history"] and key not in kwargs:
+                    kwargs[key] = value
+        except Exception as e:
+            logger.error(f"Failed to load agent configuration '{agent}': {e}")
+            error_response = {
+                "error": f"Failed to load agent configuration: {e}",
+                "message": f"I'm sorry, I couldn't process that request: Failed to load agent '{agent}'"
+            }
+            return error_response
     
     # Load schema package if specified
     if schema_name and not schema:
