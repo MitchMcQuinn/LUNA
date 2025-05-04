@@ -6,15 +6,16 @@ import sys
 
 def main():
     """
-    Log the initial message to the Neo4j database by creating a MESSAGE node
+    Log a message to the Neo4j database by creating a MESSAGE node
     and connecting it to the SESSION node with a HAS_MESSAGE relationship.
+    Works for both client messages and bot responses.
     
     The message properties are injected by the code utility through the variables parameter.
     Required variables:
     - session_id: The ID of the session
     - message_id: The ID of the message
     - content: The content of the message
-    - author_username: The username of the message author
+    - author_username: The username of the message author (client username or 'bot')
     - created_at: The timestamp when the message was created
     - channel_id: The Discord channel ID
     """
@@ -29,7 +30,7 @@ def main():
     logger.info(f"Script name: {__name__}")
     
     # Check if required variables exist in the global scope
-    required_vars = ["session_id", "message_id", "content", "author_username", "created_at", "channel_id", "guild_id"]
+    required_vars = ["session_id", "message_id", "content", "author_username", "created_at", "channel_id"]
     logger.info("=== VARIABLE EXISTENCE CHECK ===")
     
     missing_vars = []
@@ -46,14 +47,13 @@ def main():
         return [{"status": "error", "error": error_msg, "missing_variables": missing_vars}]
     
     # Log all input variables with detailed type info
-    logger.info("=== LOG_INITIAL_SESSION_MESSAGE INPUTS ===")
+    logger.info("=== LOG_MESSAGE INPUTS ===")
     logger.info(f"session_id: {session_id} (type: {type(session_id).__name__})")
     logger.info(f"message_id: {message_id} (type: {type(message_id).__name__})")
     logger.info(f"content: {content} (type: {type(content).__name__})")
     logger.info(f"author_username: {author_username} (type: {type(author_username).__name__})")
     logger.info(f"created_at: {created_at} (type: {type(created_at).__name__})")
     logger.info(f"channel_id: {channel_id} (type: {type(channel_id).__name__})")
-    logger.info(f"guild_id: {guild_id} (type: {type(guild_id).__name__})")
     logger.info("======================================")
     
     # Validate variable contents
@@ -90,8 +90,7 @@ def main():
             content: $content,
             author_username: $author_username,
             created_at: $created_at,
-            channel_id: $channel_id,
-            guild_id: $guild_id
+            channel_id: $channel_id
         })
         CREATE (s)-[:HAS_MESSAGE]->(m)
         RETURN m.message_id, s.id
@@ -107,8 +106,7 @@ def main():
             "content": content,
             "author_username": author_username,
             "created_at": created_at,
-            "channel_id": channel_id,
-            "guild_id": guild_id
+            "channel_id": channel_id
         })
         
         logger.info(f"Query parameters: {json.dumps(params, indent=2)}")
@@ -142,7 +140,7 @@ def main():
                 return [error_result]
                 
     except Exception as e:
-        error_msg = f"Error in log_initial_session_message: {str(e)}"
+        error_msg = f"Error in log_message: {str(e)}"
         logger.error(error_msg)
         logger.exception("Full exception details:")
         error_result = {
@@ -156,7 +154,7 @@ def main():
 
 # Set the result for the workflow
 logger = logging.getLogger(__name__)
-logger.info("=== STARTING LOG_INITIAL_SESSION_MESSAGE SCRIPT ===")
+logger.info("=== STARTING LOG_MESSAGE SCRIPT ===")
 try:
     result = main()
     logger.info(f"Script execution completed. Result: {json.dumps(result, indent=2)}")
@@ -186,30 +184,44 @@ Expected Configuration Format:
 When configuring this script in a workflow step, provide the following input parameters:
 {
   "function": "utils.code.code",
-  "file_path": "log_initial_session_message.py",
+  "file_path": "log_message.py",
   "variables": {
     "session_id": "SESSION_ID", // ID of the session
     "message_id": "MESSAGE_ID", // ID of the message to log
     "content": "Message content", // Content of the message
     "author_username": "username", // Author of the message
     "created_at": "TIMESTAMP", // Creation timestamp
-    "channel_id": "CHANNEL_ID", // Discord channel ID
-    "guild_id": "GUILD_ID" // Discord guild/server ID
+    "channel_id": "CHANNEL_ID" // Discord channel ID
   }
 }
 
-These variables can also use variable resolution syntax to reference outputs from previous steps:
+Example configurations for different message types:
+
+1. Client message:
 {
   "function": "utils.code.code",
-  "file_path": "log_initial_session_message.py",
+  "file_path": "log_message.py",
   "variables": {
     "session_id": "@{SESSION_ID}.create_channel_session[0].response.session_id",
     "message_id": "@{SESSION_ID}.initial.message.id",
     "content": "@{SESSION_ID}.initial.message.content",
     "author_username": "@{SESSION_ID}.initial.author.username",
     "created_at": "@{SESSION_ID}.initial.message.createdAt",
-    "channel_id": "@{SESSION_ID}.initial.channel_id",
-    "guild_id": "@{SESSION_ID}.initial.guild.id"
+    "channel_id": "@{SESSION_ID}.initial.channel_id"
+  }
+}
+
+2. Bot response:
+{
+  "function": "utils.code.code",
+  "file_path": "log_message.py",
+  "variables": {
+    "session_id": "@{SESSION_ID}.create_channel_session[0].response.session_id",
+    "message_id": "@{SESSION_ID}.bot_response.id",
+    "content": "@{SESSION_ID}.bot_response.content",
+    "author_username": "bot",
+    "created_at": "@{SESSION_ID}.bot_response.createdAt",
+    "channel_id": "@{SESSION_ID}.initial.channel_id"
   }
 }
 """
