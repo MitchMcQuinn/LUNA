@@ -9,7 +9,7 @@ import json
 logger = logging.getLogger(__name__)
 
 def generate(model="gpt-4o-mini", temperature=0.7, system=None, user=None, include_history=False, 
-          directly_set_reply=False, schema=None, **kwargs):
+          directly_set_reply=False, schema=None, schema_name=None, **kwargs):
     """
     Generate text using an AI model
     
@@ -21,6 +21,7 @@ def generate(model="gpt-4o-mini", temperature=0.7, system=None, user=None, inclu
         include_history: Whether to include conversation history
         directly_set_reply: Whether to directly set reply in output
         schema: JSON schema for structured output
+        schema_name: Name of a predefined schema package to use instead of providing a schema directly
         **kwargs: Additional parameters to pass to the model
         
     Returns:
@@ -29,6 +30,20 @@ def generate(model="gpt-4o-mini", temperature=0.7, system=None, user=None, inclu
     # Debug log the user input
     logger.info(f"DEBUG - User input received: '{user}'")
     logger.info(f"DEBUG - Is variable reference? {bool(isinstance(user, str) and '@{SESSION_ID}' in user)}")
+    
+    # Load schema package if specified
+    if schema_name and not schema:
+        try:
+            from utils.schemas import load_schema
+            schema = load_schema(schema_name)
+            logger.info(f"Loaded schema package: {schema_name}")
+        except Exception as e:
+            logger.error(f"Failed to load schema package '{schema_name}': {e}")
+            error_response = {
+                "error": f"Failed to load schema package: {e}",
+                "message": f"I'm sorry, I couldn't process that request: Failed to load schema '{schema_name}'"
+            }
+            return error_response
     
     # Check if user input looks like an unresolved variable
     if user is not None and isinstance(user, str) and (user.startswith('@{') or user.startswith('${')) and ('}' in user):
