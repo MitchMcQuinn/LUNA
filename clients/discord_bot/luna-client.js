@@ -8,7 +8,7 @@ export class LunaClient {
   }
 
   /**
-   * Create a new workflow session for each message
+   * Create a new session for each message
    * @param {Object} initialData - Initial data to populate the session with
    * @returns {Promise<Object>} Session data
    */
@@ -111,9 +111,20 @@ export class LunaClient {
       
       // Create a new session for each message
       const session = await this.createSession(contextData);
+      const sessionId = session.session_id;
       
-      // Send the message to the session
-      const response = await fetch(`${this.apiUrl}/session/${session.session_id}/message`, {
+      // First, send a system message containing the session ID to make it available via variable resolution
+      await fetch(`${this.apiUrl}/session/${sessionId}/message`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          message: `session_id:${sessionId}`,
+          message_type: 'system'
+        })
+      });
+      
+      // Then send the actual user message to the session
+      const response = await fetch(`${this.apiUrl}/session/${sessionId}/message`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -186,6 +197,9 @@ export class LunaClient {
  * - @{SESSION_ID}.data.initial_data.reply_to (Message ID this is replying to, if any)
  * - @{SESSION_ID}.data.initial_data.message_id (Original Discord message ID)
  * 
+ * Session ID can be accessed from system messages:
+ * - @{SESSION_ID}.system_messages[0].content (Format: "session_id:[SESSION_ID]")
+ * 
  * Accessing author details:
  * - @{SESSION_ID}.data.initial_data.author.id (Discord user ID)
  * - @{SESSION_ID}.data.initial_data.author.username (Author's username)
@@ -197,7 +211,8 @@ export class LunaClient {
  *   "variables": {
  *     "message_id": "@{SESSION_ID}.data.initial_data.message_id",
  *     "author": "@{SESSION_ID}.data.initial_data.author.username",
- *     "content": "@{SESSION_ID}.data.initial_data.content"
+ *     "content": "@{SESSION_ID}.data.initial_data.content",
+ *     "session_id": "@{SESSION_ID}.system_messages[0].content" // Extract session ID from system message
  *   }
  * }
  */ 
