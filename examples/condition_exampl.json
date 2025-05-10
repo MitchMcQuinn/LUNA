@@ -1,8 +1,0 @@
-// This is an example of a condition that will be used to determine if the conversation should continue.
-// It is a JSON array that contains a single object.
-// The object contains the following properties:
-// - operator: The operator to use for the condition.
-// - true: The condition to evaluate if the operator is true.
-// - false: The condition to evaluate if the operator is false.
-
-[{"operator": "AND", "true": "@{SESSION_ID}.generate.merits_followup", "false": "@{SESSION_ID}.generate.is_movie_question"}]
