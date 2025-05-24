@@ -1,5 +1,6 @@
 from utils.api import api
 import logging
+import os
 
 def main():
     """
@@ -14,12 +15,21 @@ def main():
     logger.info(f"Using content: {content}")
     logger.info(f"Using original_message_id: {message_id}")
     
+    # Load Discord token from environment
+    discord_token = os.getenv('DISCORD_TOKEN') or os.getenv('DISCORD_BOT_TOKEN') or os.getenv('BOT_TOKEN')
+    if not discord_token:
+        logger.error("No Discord token found in environment variables")
+        return {
+            "success": False,
+            "error": "Discord token not configured in environment variables"
+        }
+    
     # Make the Discord API call with the resolved values
     discord_result = api(
         method="POST",
         url="https://discord.com/api/v10/channels/" + str(channel_id) + "/messages",
         headers={
-            "Authorization": "Bot MTI4MzYwNjcxNzkxNzI5ODc2OQ.GMvgag.xxPsrqTDZwJ_2goau9kY9BRTJdc-83WSExLUJo",
+            "Authorization": f"Bot {discord_token}",
             "Content-Type": "application/json"
         },
         json_data={

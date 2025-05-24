@@ -56,7 +56,6 @@ def get_utility_registry():
             import utils.request
             import utils.reply
             import utils.conversation
-            import utils.cypher
             import utils.api
             import utils.code
             
@@ -64,7 +63,6 @@ def get_utility_registry():
             _registry.register_module("utils.request", utils.request)
             _registry.register_module("utils.reply", utils.reply)
             _registry.register_module("utils.conversation", utils.conversation)
-            _registry.register_module("utils.cypher", utils.cypher)
             _registry.register_module("utils.api", utils.api)
             _registry.register_module("utils.code", utils.code)
         except ImportError as e:

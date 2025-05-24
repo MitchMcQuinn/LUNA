@@ -455,20 +455,17 @@ class GraphWorkflowEngine:
         """Get step details from Neo4j"""
         logger = logging.getLogger(__name__)
         with self.session_manager.driver.get_session() as session:
-            # Try with both utility and function property names to handle different schema versions
+            # Query only for function property since utility doesn't exist in schema
             result = session.run(
                 """
                 MATCH (s:STEP {id: $id})
-                RETURN s.utility as utility, s.function as function, s.input as input
+                RETURN s.function as function, s.input as input
                 """,
                 id=step_id
             )
             record = result.single()
             if record:
-                # Check which property is available - prefer function over utility for consistency
                 function_value = record["function"]
-                if function_value is None:
-                    function_value = record["utility"]
                 
                 input_data = record["input"]
                 
