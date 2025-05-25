@@ -99,9 +99,11 @@ def main():
             logger.info(f"Found session {session_id} for message {message_id}")
             
             # Now find the most recent message in the session without an inbound REPLY_TO relationship
+            # but exclude messages from the bot itself to prevent replying to own messages
             unreplied_query = """
             MATCH (s:SESSION {id: $session_id})-[:HAS_MESSAGE]->(m:MESSAGE)
             WHERE NOT EXISTS { MATCH ()-[:REPLY_TO]->(m) }
+            AND m.author_username <> 'bot'
             RETURN m
             ORDER BY m.created_at DESC
             LIMIT 1
