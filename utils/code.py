@@ -109,8 +109,22 @@ def code(code=None, file_path=None, session_id=None, session_state=None, env_var
                 if file_path.startswith("luna-api/"):
                     # Remove the luna-api/ prefix and use the rest as relative path
                     relative_path = file_path[9:]  # Remove "luna-api/" prefix
-                    full_path = os.path.join(os.getcwd(), relative_path)
-                    logger.info(f"Production path detected, using: {full_path}")
+                    
+                    # Check if we're already in the luna-api directory (production case)
+                    current_dir = os.getcwd()
+                    if current_dir.endswith("luna-api"):
+                        # We're already in luna-api, so just use the relative path
+                        full_path = os.path.join(current_dir, relative_path)
+                        logger.info(f"Production path detected (in luna-api dir), using: {full_path}")
+                    else:
+                        # We're not in luna-api, so add it to the path (local development case)
+                        full_path = os.path.join(current_dir, "luna-api", relative_path)
+                        logger.info(f"Production path detected (not in luna-api dir), using: {full_path}")
+                        
+                        # If that doesn't exist, try without the luna-api prefix (fallback)
+                        if not os.path.exists(full_path):
+                            full_path = os.path.join(current_dir, relative_path)
+                            logger.info(f"Fallback: trying without luna-api prefix: {full_path}")
                 
                 # Case 2: Just a filename (e.g., "create_session.py")
                 elif os.path.basename(file_path) == file_path:
