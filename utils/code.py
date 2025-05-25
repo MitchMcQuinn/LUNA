@@ -102,8 +102,18 @@ def code(code=None, file_path=None, session_id=None, session_state=None, env_var
         if file_path and not code:
             logger.info(f"Loading code from file: {file_path}")
             try:
-                # Check if file_path is just a filename (no directory path)
-                if os.path.basename(file_path) == file_path:
+                # Handle different path formats
+                full_path = None
+                
+                # Case 1: Production path with luna-api/ prefix (e.g., "luna-api/utils/tools/create_session.py")
+                if file_path.startswith("luna-api/"):
+                    # Remove the luna-api/ prefix and use the rest as relative path
+                    relative_path = file_path[9:]  # Remove "luna-api/" prefix
+                    full_path = os.path.join(os.getcwd(), relative_path)
+                    logger.info(f"Production path detected, using: {full_path}")
+                
+                # Case 2: Just a filename (e.g., "create_session.py")
+                elif os.path.basename(file_path) == file_path:
                     # If it's just a filename, assume it's in utils/tools
                     tools_path = os.path.join(os.getcwd(), "utils", "tools", file_path)
                     if os.path.exists(tools_path):
@@ -112,16 +122,21 @@ def code(code=None, file_path=None, session_id=None, session_state=None, env_var
                     else:
                         # Fall back to normal path resolution if not found in tools
                         full_path = os.path.join(os.getcwd(), file_path)
+                        logger.info(f"File not found in tools, trying root: {full_path}")
+                
+                # Case 3: Absolute path
                 elif os.path.isabs(file_path) and os.path.exists(file_path):
-                    # If it's an absolute path, use it directly
                     full_path = file_path
+                    logger.info(f"Using absolute path: {full_path}")
+                
+                # Case 4: Relative path from project root
                 else:
-                    # Otherwise use relative to project root
                     full_path = os.path.join(os.getcwd(), file_path)
+                    logger.info(f"Using relative path from root: {full_path}")
                 
                 # Check if path exists
                 if not os.path.exists(full_path):
-                    raise FileNotFoundError(f"Code file not found: {file_path}")
+                    raise FileNotFoundError(f"Code file not found: {file_path} (resolved to: {full_path})")
                 
                 # Read the file
                 with open(full_path, 'r') as file:
